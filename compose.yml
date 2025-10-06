@@ -1,0 +1,213 @@
+version: '3.8'
+ 
+services:
+  database:
+    image: postgres:alpine3.18
+    container_name: postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgresql_data:/var/lib/postgresql/data
+    networks:
+      - dev-bridge
+ 
+  pgadmin4:
+    image: dpage/pgadmin4
+    container_name: pgadmin4
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+    ports:
+      - "5001:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - dev-bridge
+ 
+  redis-stack:
+    image: redis/redis-stack-server:latest  # Redis Stack image
+    container_name: redis-stack
+    restart: always
+    ports:
+      - "6379:6379"  # Redis default TCP port
+      - "8001:8001"  # Redis Stack Web UI (RedisInsight)
+    volumes:
+      - redis_data:/data  # Redis persistent storage
+    networks:
+      - dev-bridge
+ 
+  emqx:
+    image: emqx:latest
+    container_name: emqx
+    restart: always
+    ports:
+      - "1883:1883"      # Standard MQTT Port
+      - "8083:8083"      # Listener for WebSocket
+      - "8883:8883"      # Listener for MQTT over SSL (MQTTS)
+      - "8084:8084"      # Listener for WebSocket over SSL (WSS)
+      - "18083:18083"    # EMQ X Management Dashboard
+    volumes:
+      - emqx_data:/opt/emqx/certs  # Mount SSL certificates
+      - emqx_data:/opt/emqx/data  # Persist data
+      - emqx_data:/opt/emqx/log   # Persist logs
+    environment:
+      ## Critical: Force disconnect connections with large buffers
+      - EMQX_FORCE_SHUTDOWN__ENABLE=true
+      - EMQX_FORCE_SHUTDOWN__MAX_HEAP_SIZE=32MB
+      - EMQX_FORCE_SHUTDOWN__MAX_MESSAGE_QUEUE_LEN=10000
+      
+      ## TCP buffer limits - Increased for high data volume
+      - EMQX_LISTENER__TCP__EXTERNAL__SEND_BUFFER=16MB
+      - EMQX_LISTENER__TCP__EXTERNAL__RECBUF=16MB
+      - EMQX_LISTENER__TCP__EXTERNAL__SNDBUF=16MB
+      - EMQX_LISTENER__TCP__EXTERNAL__BUFFER=16MB
+      - EMQX_LISTENER__TCP__EXTERNAL__HIGH_WATERMARK=32MB
+      - EMQX_LISTENER__TCP__EXTERNAL__NODELAY=true
+      - EMQX_LISTENER__TCP__EXTERNAL__REUSEADDR=true
+      
+      ## Connection settings - Increased acceptors for better concurrency
+      - EMQX_LISTENER__TCP__EXTERNAL__ACCEPTORS=16
+      - EMQX_LISTENER__TCP__EXTERNAL__MAX_CONNECTIONS=100000
+      - EMQX_LISTENER__TCP__EXTERNAL__MAX_CONN_RATE=5000  
+      
+      ## Message queue limits - Increased for high throughput
+      - EMQX_MQTT__MAX_MQUEUE_LEN=5000
+      - EMQX_MQTT__MQUEUE_STORE_QOS0=false
+      - EMQX_MQTT__MAX_INFLIGHT=256
+      - EMQX_MQTT__MAX_PACKET_SIZE=10MB
+      - EMQX_MQTT__MAX_AWAITING_REL=1000
+      
+      ## Force garbage collection
+      - EMQX_FORCE_GC__ENABLE=true
+      - EMQX_FORCE_GC__COUNT=10000
+      - EMQX_FORCE_GC__BYTES=10MB
+      
+      ## Overload protection
+      - EMQX_OVERLOAD_PROTECTION__ENABLE=true
+      
+      ## Logging
+      - EMQX_LOG__CONSOLE__LEVEL=warning
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    networks:
+      - dev-bridge
+
+  backend:
+    build:
+      context: ./backend
+      args:
+        NPM_TOKEN: "${NPM_TOKEN}"
+    container_name: backend
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - META_DB_NAME=duetto_analytics_db
+      - META_DB_USERNAME=${POSTGRES_USER}
+      - META_DB_PASSWORD=${POSTGRES_PASSWORD}
+      - META_DB_PORT=5432
+      - META_DB_HOST=database
+      - SENSOR_DB_NAME=duetto_analytics_db
+      - SENSOR_DB_USERNAME=${POSTGRES_USER}
+      - SENSOR_DB_PASSWORD=${POSTGRES_PASSWORD}
+      - SENSOR_DB_PORT=5432
+      - SENSOR_DB_HOST=database
+      - MQTT_URL=${MQTT_URL}
+    ports:
+      - "3000:3000"
+    volumes:
+      - application_data:/opt/duettodata  # Mount license files here
+      - /etc/machine-id:/etc/machine-id
+    depends_on:
+      - database
+      - redis-stack  # Updated to Redis Stack
+    networks:
+      - dev-bridge  # Ensures backend is on the same network as Redis for connectivity
+ 
+  service:
+    build:
+      context: ./service
+      args:
+        NPM_TOKEN: "${NPM_TOKEN}"
+    container_name: service
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - META_DB_NAME=duetto_analytics_db
+      - META_DB_USERNAME=${POSTGRES_USER}
+      - META_DB_PASSWORD=${POSTGRES_PASSWORD}
+      - META_DB_PORT=5432
+      - META_DB_HOST=database
+      - SENSOR_DB_NAME=duetto_analytics_db
+      - SENSOR_DB_USERNAME=${POSTGRES_USER}
+      - SENSOR_DB_PASSWORD=${POSTGRES_PASSWORD}
+      - SENSOR_DB_PORT=5432
+      - SENSOR_DB_HOST=database
+      - MQTT_URL=${MQTT_URL}
+      - DISCOVERY_URL=discovery:7500
+      - REDIS_SERVER_IP_ADDRESS=redis-stack  # Updated to Redis Stack
+      - INFLUXDB_IP_ADDRESS=influxdb
+      - INFLUXDB_TOKEN=${INFLUX_ADMIN_TOKEN}
+      - INFLUXDB_ORG=${INFLUX_ORG}
+      - INFLUXDB_BUCKET=${INFLUX_BUCKET}
+    volumes:
+      - application_data:/opt/duettodata # Mount license files here
+    depends_on:
+      - emqx
+      - database
+      - redis-stack  # Updated to Redis Stack
+      - backend
+      - influxdb
+    networks:
+      - dev-bridge  # Ensures backend is on the same network as Redis for connectivity
+ 
+  discovery:
+    build: ./discovery
+    container_name: discovery
+    restart: always
+    network_mode: host
+  
+  influxdb:
+    image: influxdb:2
+    container_name: influxdb
+    restart: always
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUX_USERNAME}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUX_PASSWORD}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUX_ORG}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUX_BUCKET}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUX_ADMIN_TOKEN}
+    networks:
+        - dev-bridge
+ 
+volumes:
+  postgresql_data:
+    driver: local
+  redis_data:
+    driver: local
+  emqx_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+  application_data:
+    driver: local
+  influxdb_data:
+    driver: local
+ 
+networks:
+  dev-bridge:
+    driver: bridge

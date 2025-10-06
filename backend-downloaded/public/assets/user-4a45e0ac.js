@@ -1,0 +1,1 @@
+import{O as e,N as t}from"./index-b5422eae.js";const o=async()=>await e.get(t.user.list),c=async(s,r)=>await e.put(`${t.user.update}/${s}`,r),p=async s=>await e.post(`/${t.user.create}`,s),u=async s=>await e.delete(`${t.user.delete}/${s}`);export{p as c,u as d,o as g,c as u};

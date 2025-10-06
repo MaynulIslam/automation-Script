@@ -1,0 +1,1 @@
+import{ce as a}from"./index-b5422eae.js";import{_ as o}from"./_baseIteratee-8de60f2f.js";function i(e,s){for(var t,u=-1,m=e.length;++u<m;){var n=s(e[u]);n!==void 0&&(t=t===void 0?n:t+n)}return t}var r=i,f=o,l=r;function b(e,s){return e&&e.length?l(e,f(s)):0}var d=b;const h=a(d);export{h as s};

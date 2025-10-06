@@ -1,0 +1,1 @@
+import{j as r,W as s,gq as e}from"./index-b5422eae.js";function i(){return r.jsxs(r.Fragment,{children:[r.jsx(s,{children:r.jsx("title",{children:" MUI: Progress"})}),r.jsx(e,{})]})}export{i as default};

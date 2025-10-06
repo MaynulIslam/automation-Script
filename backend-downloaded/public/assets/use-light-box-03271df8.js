@@ -1,0 +1,1 @@
+import{r as n}from"./index-b5422eae.js";function l(o){const[s,e]=n.useState(-1),a=n.useCallback(c=>{const p=o.findIndex(t=>t.type==="video"?t.poster===c:t.src===c);e(p)},[o]),r=n.useCallback(()=>{e(-1)},[]);return{selected:s,open:s>=0,onOpen:a,onClose:r,setSelected:e}}export{l as u};

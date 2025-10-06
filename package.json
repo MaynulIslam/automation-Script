@@ -1,0 +1,44 @@
+{
+  "name": "duetto-analytics-test-automation",
+  "version": "1.0.0",
+  "description": "API Test Automation for Duetto Analytics",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest --verbose",
+    "test:user": "jest tests/api/user.test.js",
+    "test:device": "jest tests/api/device.test.js",
+    "test:analytics": "jest tests/api/analytics.test.js",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "postman:run": "newman run postman/DuettoAnalytics.postman_collection.json -e postman/environment.json"
+  },
+  "keywords": [
+    "api",
+    "testing",
+    "automation",
+    "jest"
+  ],
+  "author": "QA Team",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "jest": "^29.7.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "newman": "^6.1.1",
+    "dotenv": "^16.4.5"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testTimeout": 30000,
+    "verbose": true,
+    "collectCoverageFrom": [
+      "tests/**/*.js"
+    ],
+    "coverageDirectory": "coverage",
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ]
+  }
+}

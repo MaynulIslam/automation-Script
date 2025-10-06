@@ -1,0 +1,30 @@
+const express = require('express');
+const router = express.Router();
+
+router.use('/user', require('./user'));
+router.use('/settings', require('./settings'));
+router.use('/organization', require('./organization'));
+router.use('/userorganization', require('./userorganization'));
+router.use('/devicetype', require('./devicetype'));
+router.use('/device', require('./device'));
+router.use('/devicesensormaster', require('./devicesensormaster'));
+router.use('/sensoralarm', require('./sensoralarm'));
+router.use('/calibrationrule', require('./calibrationrule'));
+router.use('/devicesensorcalrule', require('./devicesensorcalrule'));
+router.use('/customfield', require('./customfield'));
+router.use('/analytics', require('./analytics'));
+router.use('/update', require('./update'));
+router.use('/license', require('./license'));
+router.use('/report', require('./report'));
+router.use('/alarmreport', require('./alarmreport'));
+router.use('/sensorregulation', require('./sensorregulation'));
+router.use('/regulatorybody', require('./regulatorybody'));
+router.use('/country', require('./country'));
+router.use('/shift', require('./shift'));
+router.use('/module', require('./module'));
+router.use('/department', require('./department'));
+router.use('/notification', require('./notification'));
+router.use('/userdepartment', require('./userdepartment'));
+router.use('/departmentmodule', require('./departmentmodule'));
+
+module.exports = router;

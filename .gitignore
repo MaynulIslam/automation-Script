@@ -1,0 +1,30 @@
+# Node modules
+node_modules/
+
+# Test coverage
+coverage/
+
+# Environment variables
+.env
+.env.local
+.env.test
+
+# Test configuration with credentials
+tests/config.js
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Downloaded backend (keep structure but not files)
+backend-downloaded/node_modules/

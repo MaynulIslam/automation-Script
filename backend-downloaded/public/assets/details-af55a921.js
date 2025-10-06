@@ -1,0 +1,1 @@
+import{j as r,W as e}from"./index-b5422eae.js";import{u as s}from"./use-params-bc3ae603.js";function i(){return s(),r.jsx(r.Fragment,{children:r.jsx(e,{children:r.jsx("title",{children:" Dashboard: Job Details"})})})}export{i as default};
