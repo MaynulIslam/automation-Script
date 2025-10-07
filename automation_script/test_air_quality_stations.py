@@ -257,7 +257,6 @@ def layout_air_quality_station(page: Page):
                         badge_number = badge.inner_text().strip()
                         print(f'  [DEBUG] Processing badge {badge_number}')
 
-                        # Approach 1: Look for any paragraph near this badge
                         # Get all text content from the parent Paper component
                         # Go up to the Paper element
                         paper = badge.locator('..').locator('..').locator('..').locator('..')
@@ -283,8 +282,45 @@ def layout_air_quality_station(page: Page):
                                 break
 
                         if sensor_text:
-                            configured_sensors.append(f"{badge_number}.{sensor_text}")
-                            print(f'    ✓ Sensor {badge_number}: {sensor_text}')
+                            # Check if this is a Climate Sensor
+                            if 'Climate' in sensor_text:
+                                # Look for checked checkboxes for Climate sensor
+                                checked_items = []
+
+                                # Check for Temp checkbox
+                                temp_checkbox = paper.locator('input[type="checkbox"]').nth(0)
+                                if temp_checkbox.count() > 0 and temp_checkbox.is_checked():
+                                    checked_items.append('Temp')
+
+                                # Check for Humidity checkbox
+                                humidity_checkbox = paper.locator('input[type="checkbox"]').nth(1)
+                                if humidity_checkbox.count() > 0 and humidity_checkbox.is_checked():
+                                    checked_items.append('Humidity')
+
+                                # Check for Wet Bulb checkbox
+                                wetbulb_checkbox = paper.locator('input[type="checkbox"]').nth(2)
+                                if wetbulb_checkbox.count() > 0 and wetbulb_checkbox.is_checked():
+                                    checked_items.append('Wet Bulb')
+
+                                # Check for WBGT checkbox
+                                wbgt_checkbox = paper.locator('input[type="checkbox"]').nth(3)
+                                if wbgt_checkbox.count() > 0 and wbgt_checkbox.is_checked():
+                                    checked_items.append('WBGT')
+
+                                if checked_items:
+                                    # For each checked item, add as separate sensor with incremented badge number
+                                    for sub_idx, item in enumerate(checked_items):
+                                        actual_badge = int(badge_number) + sub_idx
+                                        configured_sensors.append(f"{actual_badge}.{item}")
+                                        print(f'    ✓ Sensor {actual_badge}: {item} (from Climate)')
+                                else:
+                                    # No items checked, just add Climate
+                                    configured_sensors.append(f"{badge_number}.{sensor_text}")
+                                    print(f'    ✓ Sensor {badge_number}: {sensor_text}')
+                            else:
+                                # Regular sensor (not Climate)
+                                configured_sensors.append(f"{badge_number}.{sensor_text}")
+                                print(f'    ✓ Sensor {badge_number}: {sensor_text}')
                         else:
                             print(f'  [WARN] Could not extract sensor text for badge {badge_number}')
 
