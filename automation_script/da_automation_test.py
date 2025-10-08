@@ -3,6 +3,9 @@ import time
 import psycopg2
 import pandas as pd
 import os
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Font
+from datetime import datetime
 
 
 def login():
@@ -189,6 +192,314 @@ def data_fetch():
         print('='*70 + '\n')
 
 
+def parse_time_to_seconds(time_str):
+    """Convert time string like '2min' to seconds"""
+    time_str = time_str.strip().lower()
+
+    if 'min' in time_str:
+        return int(time_str.replace('min', '').strip()) * 60
+    elif 'sec' in time_str:
+        return int(time_str.replace('sec', '').strip())
+    else:
+        # Default to minutes if no unit specified
+        return int(time_str) * 60
+
+
+def get_test_configuration():
+    """Get test configuration from user"""
+    print('\n' + '='*70)
+    print('TEST CONFIGURATION')
+    print('='*70)
+
+    duetto_url = input('\nEnter Duetto IP address with port (e.g., http://192.168.10.232:3000/): ').strip()
+
+    # Validate URL
+    if not duetto_url:
+        print('[ERROR] URL cannot be empty')
+        return None
+
+    # Add http:// if not present
+    if not duetto_url.startswith('http://') and not duetto_url.startswith('https://'):
+        duetto_url = 'http://' + duetto_url
+
+    # Ensure trailing slash
+    if not duetto_url.endswith('/'):
+        duetto_url += '/'
+
+    iterations = int(input('\nHow many times to run tests? (e.g., 10): ').strip())
+
+    interval_input = input('\nInterval between test runs? (e.g., 1min, 2min, 10min): ').strip()
+    interval_seconds = parse_time_to_seconds(interval_input)
+
+    refresh_input = input('\nBrowser page refresh interval? (e.g., 5min, 10min): ').strip()
+    refresh_seconds = parse_time_to_seconds(refresh_input)
+
+    print('\n[CONFIG] Test Configuration:')
+    print(f'  - URL: {duetto_url}')
+    print(f'  - Iterations: {iterations}')
+    print(f'  - Test Interval: {interval_seconds}s ({interval_input})')
+    print(f'  - Refresh Interval: {refresh_seconds}s ({refresh_input})')
+
+    return {
+        'duetto_url': duetto_url,
+        'iterations': iterations,
+        'interval_seconds': interval_seconds,
+        'refresh_seconds': refresh_seconds,
+        'interval_display': interval_input,
+        'refresh_display': refresh_input
+    }
+
+
+def wait_with_countdown(seconds):
+    """Wait with countdown display"""
+    if seconds <= 0:
+        return
+
+    print(f'\n[WAIT] Waiting {seconds} seconds until next run...')
+    for remaining in range(seconds, 0, -1):
+        mins, secs = divmod(remaining, 60)
+        print(f'\rTime remaining: {mins:02d}:{secs:02d}', end='', flush=True)
+        time.sleep(1)
+    print('\n')
+
+
+def should_refresh_browser(last_refresh_time, refresh_interval):
+    """Check if browser should be refreshed"""
+    return (time.time() - last_refresh_time) >= refresh_interval
+
+
+def refresh_browser(page):
+    """Refresh browser page and navigate to dashboard"""
+    print('\n[REFRESH] Refreshing browser page...')
+    try:
+        # Click Dashboard button to ensure we're on the right page
+        dashboard_btn = page.get_by_role("button", name="Dashboard")
+        if dashboard_btn.count() > 0:
+            dashboard_btn.click()
+            page.wait_for_load_state('networkidle')
+            time.sleep(2)
+        else:
+            # Fallback to page reload
+            page.reload()
+            page.wait_for_load_state('networkidle')
+            time.sleep(2)
+        print('[SUCCESS] Page refreshed')
+    except Exception as e:
+        print(f'[ERROR] Failed to refresh page: {str(e)}')
+        raise
+
+
+def perform_login(page, duetto_url):
+    """Perform login on the given page"""
+    print(f'[INFO] Navigating to: {duetto_url}')
+
+    page.goto(duetto_url)
+    page.wait_for_load_state('networkidle')
+    time.sleep(2)
+
+    print('[INFO] Entering credentials (admin/admin)...')
+    page.fill('input[name="user_name"]', 'admin')
+    page.fill('input[name="password"]', 'admin')
+
+    print('[INFO] Clicking login button...')
+    page.click('button[type="submit"]')
+    page.wait_for_load_state('networkidle')
+    time.sleep(3)
+
+    # Check if login was successful
+    current_url = page.url
+    is_logged_in = False
+
+    if 'login' not in current_url.lower():
+        is_logged_in = True
+
+    try:
+        dashboard_btn = page.get_by_role("button", name="Dashboard")
+        if dashboard_btn.count() > 0:
+            is_logged_in = True
+    except:
+        pass
+
+    if is_logged_in:
+        print('[SUCCESS] Login Successful')
+        print(f'[INFO] Current URL: {current_url}')
+        return True
+    else:
+        print('[FAIL] Login Failed')
+        print(f'[INFO] Current URL: {current_url}')
+        return False
+
+
+def print_final_summary(results, exception_count, start_time):
+    """Print final test summary"""
+    end_time = time.time()
+    duration_seconds = int(end_time - start_time)
+    duration_mins = duration_seconds // 60
+    duration_secs = duration_seconds % 60
+
+    print('\n' + '#'*70)
+    print('# FINAL TEST SUMMARY')
+    print('#'*70)
+
+    total_runs = len(results)
+    passed = sum(1 for r in results if 'PASS' in r['status'])
+    failed = total_runs - passed
+
+    print(f'\nTotal test runs: {total_runs}')
+    print(f'Passed: {passed}')
+    print(f'Failed: {failed}')
+    print(f'Exceptions handled: {exception_count}')
+    print(f'Total duration: {duration_mins}m {duration_secs}s')
+
+    print('\nDetailed Results:')
+    print('-' * 70)
+    for result in results:
+        status_symbol = '✓' if 'PASS' in result['status'] else '✗'
+        print(f"{status_symbol} Run {result['run']}: {result['status']}")
+        print(f"   - Device Count: {'PASS' if result['device_count'] else 'FAIL'}")
+        print(f"   - Sensor Sequence: {'PASS' if result['sensor_sequence'] else 'FAIL'}")
+
+    print('#'*70 + '\n')
+
+
+def build_fail_description(device_count_result, sensor_sequence_result):
+    """Build detailed fail description from verification results"""
+    fail_lines = []
+
+    # Check device count failures
+    if not device_count_result['pass']:
+        fail_lines.append('DEVICE COUNT VERIFICATION FAILED:')
+        fail_lines.append(f"  Expected: {device_count_result['expected_count']} devices")
+        fail_lines.append(f"  Actual: {device_count_result['actual_count']} devices")
+
+        if device_count_result['missing_devices']:
+            fail_lines.append(f"  Missing devices: {', '.join(device_count_result['missing_devices'])}")
+
+        if device_count_result['extra_devices']:
+            fail_lines.append(f"  Extra devices: {', '.join(device_count_result['extra_devices'])}")
+
+        fail_lines.append('')  # Empty line separator
+
+    # Check sensor sequence failures
+    if not sensor_sequence_result['pass']:
+        fail_lines.append('SENSOR SEQUENCE VERIFICATION FAILED:')
+        fail_lines.append(f"  Devices tested: {sensor_sequence_result['devices_tested']}")
+        fail_lines.append(f"  Devices passed: {sensor_sequence_result['devices_passed']}")
+        fail_lines.append(f"  Devices failed: {sensor_sequence_result['devices_failed']}")
+        fail_lines.append('')
+
+        # Add details for each failed device
+        if sensor_sequence_result['failure_details']:
+            fail_lines.append('  Failed Devices:')
+            for idx, failure in enumerate(sensor_sequence_result['failure_details'], 1):
+                fail_lines.append(f"  {idx}. {failure['device_name']}:")
+                for mismatch in failure['sensor_mismatches']:
+                    fail_lines.append(f"     - {mismatch}")
+
+    return '\n'.join(fail_lines) if fail_lines else ''
+
+
+def capture_failure_screenshot(page, test_run):
+    """Capture screenshot on test failure"""
+    # Create screenshots directory if it doesn't exist
+    screenshots_dir = os.path.join(os.path.dirname(__file__), 'screenshots')
+    os.makedirs(screenshots_dir, exist_ok=True)
+
+    # Generate screenshot filename with timestamp
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    screenshot_filename = f'test_run_{test_run}_fail_{timestamp}.png'
+    screenshot_path = os.path.join(screenshots_dir, screenshot_filename)
+
+    # Capture full page screenshot
+    page.screenshot(path=screenshot_path, full_page=True)
+
+    print(f'[SCREENSHOT] Saved: {screenshot_path}')
+
+    # Return relative path for Excel
+    return f'screenshots/{screenshot_filename}'
+
+
+def initialize_excel_report():
+    """Initialize or load Excel report file"""
+    report_path = os.path.join(os.path.dirname(__file__), 'Report.xlsx')
+
+    # Check if file exists
+    if os.path.exists(report_path):
+        # Load existing workbook
+        wb = load_workbook(report_path)
+        if 'Test Results' in wb.sheetnames:
+            ws = wb['Test Results']
+        else:
+            ws = wb.create_sheet('Test Results')
+    else:
+        # Create new workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Test Results'
+
+    # Clear existing data and set headers
+    ws.delete_rows(1, ws.max_row)
+
+    # Set headers
+    headers = ['Test Run', 'Pass/Fail', 'Fail Description', 'References']
+    ws.append(headers)
+
+    # Format headers
+    for col in range(1, 5):
+        cell = ws.cell(1, col)
+        cell.font = Font(bold=True, size=12)
+        cell.alignment = Alignment(horizontal='center', vertical='top')
+
+    # Set column widths
+    ws.column_dimensions['A'].width = 12  # Test Run
+    ws.column_dimensions['B'].width = 12  # Pass/Fail
+    ws.column_dimensions['C'].width = 80  # Fail Description
+    ws.column_dimensions['D'].width = 40  # References
+
+    # Save
+    wb.save(report_path)
+    print(f'[EXCEL] Initialized report: {report_path}')
+
+    return report_path
+
+
+def write_test_result_to_excel(test_run, pass_fail, fail_description, screenshot_path):
+    """Write test result to Excel report"""
+    report_path = os.path.join(os.path.dirname(__file__), 'Report.xlsx')
+
+    # Load workbook
+    wb = load_workbook(report_path)
+    ws = wb['Test Results']
+
+    # Append new row
+    row_data = [test_run, pass_fail, fail_description, screenshot_path]
+    ws.append(row_data)
+
+    # Format the new row
+    row_num = ws.max_row
+
+    # Center align Test Run and Pass/Fail columns
+    ws.cell(row_num, 1).alignment = Alignment(horizontal='center', vertical='top')
+    ws.cell(row_num, 2).alignment = Alignment(horizontal='center', vertical='top')
+
+    # Wrap text for Fail Description
+    ws.cell(row_num, 3).alignment = Alignment(wrap_text=True, vertical='top')
+    ws.row_dimensions[row_num].height = None  # Auto-height
+
+    # Format References
+    ws.cell(row_num, 4).alignment = Alignment(vertical='top')
+
+    # Set Pass/Fail cell color
+    if pass_fail == 'PASS':
+        ws.cell(row_num, 2).font = Font(color='008000', bold=True)  # Green
+    else:
+        ws.cell(row_num, 2).font = Font(color='FF0000', bold=True)  # Red
+
+    # Save
+    wb.save(report_path)
+    print(f'[EXCEL] Updated report: Test Run {test_run} - {pass_fail}')
+
+
 def verify_device_count(page):
     """Verify Air Quality Stations tab has correct number of devices"""
 
@@ -294,7 +605,15 @@ def verify_device_count(page):
 
     print('='*70 + '\n')
 
-    return overall_pass
+    # Return detailed result dictionary
+    result = {
+        'pass': overall_pass,
+        'expected_count': len(aqs_devices),
+        'actual_count': actual_device_count,
+        'missing_devices': list(missing_devices),
+        'extra_devices': list(extra_devices)
+    }
+    return result
 
 
 def verify_sensor_sequence(page):
@@ -396,6 +715,7 @@ def verify_sensor_sequence(page):
 
     passed_devices = 0
     failed_devices = 0
+    failure_details = []  # Store detailed failure info
 
     for row_idx in range(actual_device_count):
         row = table_rows.nth(row_idx)
@@ -425,6 +745,7 @@ def verify_sensor_sequence(page):
             # Extract sensors from columns 3-12 (Sensor 1-10)
             sensor_match_count = 0
             sensor_mismatch_count = 0
+            sensor_mismatches = []  # Store mismatches for this device
 
             for sensor_idx, expected_sensor in enumerate(expected_sensors):
                 position = expected_sensor['position']
@@ -443,12 +764,16 @@ def verify_sensor_sequence(page):
                         print(f'  ✓ Sensor {position}: {expected_location} (config_type: {expected_config_type})')
                         sensor_match_count += 1
                     else:
-                        print(f'  ✗ Sensor {position}: Expected "{expected_location}", but found "{sensor_text[:50]}"')
+                        mismatch_msg = f'Sensor {position}: Expected "{expected_location}", but found "{sensor_text[:50]}"'
+                        print(f'  ✗ {mismatch_msg}')
                         sensor_mismatch_count += 1
+                        sensor_mismatches.append(mismatch_msg)
 
                 except Exception as e:
-                    print(f'  ✗ Sensor {position}: Could not read sensor data - {str(e)}')
+                    error_msg = f'Sensor {position}: Could not read sensor data - {str(e)}'
+                    print(f'  ✗ {error_msg}')
                     sensor_mismatch_count += 1
+                    sensor_mismatches.append(error_msg)
 
             # Check remaining columns should be empty
             for empty_position in range(len(expected_sensors) + 1, 11):
@@ -468,10 +793,20 @@ def verify_sensor_sequence(page):
             else:
                 print(f'[FAIL] Sensor sequence mismatch ({sensor_match_count} matches, {sensor_mismatch_count} mismatches)')
                 failed_devices += 1
+                # Store failure details
+                failure_details.append({
+                    'device_name': device_name_text,
+                    'sensor_mismatches': sensor_mismatches
+                })
 
         except Exception as e:
-            print(f'[ERROR] Failed to process device row {row_idx}: {str(e)}')
+            error_msg = f'Failed to process device row {row_idx}: {str(e)}'
+            print(f'[ERROR] {error_msg}')
             failed_devices += 1
+            failure_details.append({
+                'device_name': f'Device at row {row_idx + 1}',
+                'sensor_mismatches': [error_msg]
+            })
 
     # STEP 6: Summary
     print('\n' + '='*70)
@@ -490,123 +825,223 @@ def verify_sensor_sequence(page):
 
     print('='*70 + '\n')
 
-    return overall_pass
+    # Return detailed result dictionary
+    result = {
+        'pass': overall_pass,
+        'devices_tested': passed_devices + failed_devices,
+        'devices_passed': passed_devices,
+        'devices_failed': failed_devices,
+        'failure_details': failure_details
+    }
+    return result
 
 
 def test_case_one():
-    """Test Case 1: Verify device quantity and sensor sequence on Air Quality Stations tab"""
+    """Enhanced Test Case 1: Verify device quantity and sensor sequence with configurable iterations"""
 
     print('\n' + '#'*70)
     print('# TEST CASE 1: Air Quality Stations Verification')
+    print('# Enhanced with Loop, Interval, and Exception Handling')
     print('#'*70 + '\n')
 
     # Step 1: Fetch latest data from database
     print('[WORKFLOW] Step 1: Fetching latest data from database...')
     data_fetch()
 
-    # Step 2: Launch browser and login
-    print('\n[WORKFLOW] Step 2: Launching browser and logging in...')
+    # Step 2: Get test configuration
+    print('\n[WORKFLOW] Step 2: Getting test configuration...')
+    config = get_test_configuration()
 
-    # Ask user for Duetto IP with port
-    duetto_url = input('\nEnter Duetto IP address with port (e.g., http://192.168.10.232:3000/): ').strip()
-
-    # Validate URL is not empty
-    if not duetto_url:
-        print('[ERROR] URL cannot be empty')
+    if config is None:
+        print('[ERROR] Invalid configuration')
         return
 
-    # Add http:// if not present
-    if not duetto_url.startswith('http://') and not duetto_url.startswith('https://'):
-        duetto_url = 'http://' + duetto_url
+    # Initialize tracking
+    results = []
+    exception_count = 0
+    start_time = time.time()
+    last_refresh_time = start_time
 
-    # Ensure trailing slash
-    if not duetto_url.endswith('/'):
-        duetto_url += '/'
+    # Initialize Excel report
+    print('\n[WORKFLOW] Initializing Excel report...')
+    initialize_excel_report()
 
-    # Start Playwright
+    # Step 3: Launch browser and login
+    print('\n[WORKFLOW] Step 3: Launching browser and logging in...')
+
     with sync_playwright() as p:
         # Launch browser
         browser = p.chromium.launch(headless=False, slow_mo=500)
         context = browser.new_context(viewport={'width': 1920, 'height': 1080})
         page = context.new_page()
 
-        # Navigate to login page
-        print(f'[INFO] Navigating to: {duetto_url}')
+        # Initial login
+        login_success = perform_login(page, config['duetto_url'])
 
-        try:
-            page.goto(duetto_url)
-            page.wait_for_load_state('networkidle')
-            time.sleep(2)
-        except Exception as e:
-            print(f'[ERROR] Failed to navigate to login page: {str(e)}')
+        if not login_success:
             browser.close()
+            print('[ERROR] Initial login failed. Exiting.')
             return
 
-        # Fill in credentials
-        print('[INFO] Entering credentials (admin/admin)...')
-        page.fill('input[name="user_name"]', 'admin')
-        page.fill('input[name="password"]', 'admin')
+        # Step 4: Run test loop
+        print('\n[WORKFLOW] Step 4: Starting test iterations...')
+        print(f"[INFO] Will run {config['iterations']} iterations with {config['interval_display']} interval\n")
 
-        # Click login button
-        print('[INFO] Clicking login button...')
-        page.click('button[type="submit"]')
-        page.wait_for_load_state('networkidle')
-        time.sleep(3)
+        for iteration in range(1, config['iterations'] + 1):
+            print('\n' + '='*70)
+            print(f'TEST RUN {iteration}/{config["iterations"]}')
+            print('='*70)
 
-        # Check if login was successful
-        current_url = page.url
+            try:
+                # Check if browser needs refresh
+                if should_refresh_browser(last_refresh_time, config['refresh_seconds']):
+                    print(f'[INFO] {config["refresh_display"]} passed since last refresh')
+                    refresh_browser(page)
+                    last_refresh_time = time.time()
 
-        is_logged_in = False
+                # Run device count verification
+                print(f'\n[RUN {iteration}] Running device quantity verification...')
+                device_count_result = verify_device_count(page)
 
-        # Check 1: URL doesn't contain login
-        if 'login' not in current_url.lower():
-            is_logged_in = True
+                # Run sensor sequence verification
+                print(f'\n[RUN {iteration}] Running sensor sequence verification...')
+                sensor_sequence_result = verify_sensor_sequence(page)
 
-        # Check 2: Try to find Dashboard button
-        try:
-            dashboard_btn = page.get_by_role("button", name="Dashboard")
-            if dashboard_btn.count() > 0:
-                is_logged_in = True
-        except:
-            pass
+                # Determine overall pass/fail
+                overall_pass = device_count_result['pass'] and sensor_sequence_result['pass']
 
-        if is_logged_in:
-            print('[SUCCESS] Login Successful')
-            print(f'[INFO] Current URL: {current_url}')
-        else:
-            print('[FAIL] Login Failed')
-            print(f'[INFO] Current URL: {current_url}')
-            browser.close()
-            return
+                # Build fail description and capture screenshot if failed
+                fail_description = ''
+                screenshot_path = ''
+                if not overall_pass:
+                    fail_description = build_fail_description(device_count_result, sensor_sequence_result)
+                    screenshot_path = capture_failure_screenshot(page, iteration)
 
-        # Step 3: Run device count verification
-        print('\n[WORKFLOW] Step 3: Running device quantity verification...')
-        result1 = verify_device_count(page)
+                # Write to Excel report
+                write_test_result_to_excel(
+                    test_run=iteration,
+                    pass_fail='PASS' if overall_pass else 'FAIL',
+                    fail_description=fail_description,
+                    screenshot_path=screenshot_path
+                )
 
-        # Step 4: Run sensor sequence verification
-        print('\n[WORKFLOW] Step 4: Running sensor sequence verification...')
-        result2 = verify_sensor_sequence(page)
+                # Record results for final summary
+                results.append({
+                    'run': iteration,
+                    'device_count': device_count_result['pass'],
+                    'sensor_sequence': sensor_sequence_result['pass'],
+                    'status': 'PASS' if overall_pass else 'FAIL'
+                })
 
-        # Final Summary
-        print('\n' + '#'*70)
-        print('# TEST CASE 1 FINAL SUMMARY')
-        print('#'*70)
-        print(f'Device Quantity Verification: {"✓ PASS" if result1 else "✗ FAIL"}')
-        print(f'Sensor Sequence Verification: {"✓ PASS" if result2 else "✗ FAIL"}')
+                print(f'\n[RUN {iteration}] Result: {"✓ PASS" if overall_pass else "✗ FAIL"}')
 
-        overall_result = result1 and result2
-        if overall_result:
-            print('\n[OVERALL RESULT] ✓✓ TEST CASE 1 PASSED!')
-        else:
-            print('\n[OVERALL RESULT] ✗✗ TEST CASE 1 FAILED')
-        print('#'*70 + '\n')
+            except Exception as e:
+                print(f'\n[EXCEPTION] Error in run {iteration}: {str(e)}')
+                print('[RECOVERY] Attempting to restart browser and re-login...')
+
+                exception_count += 1
+
+                # Close current browser
+                try:
+                    browser.close()
+                except:
+                    pass
+
+                # Small wait before restart
+                time.sleep(2)
+
+                # Restart browser and re-login
+                try:
+                    browser = p.chromium.launch(headless=False, slow_mo=500)
+                    context = browser.new_context(viewport={'width': 1920, 'height': 1080})
+                    page = context.new_page()
+
+                    login_success = perform_login(page, config['duetto_url'])
+
+                    if not login_success:
+                        print('[ERROR] Re-login failed after exception')
+
+                        # Write failure to Excel
+                        write_test_result_to_excel(
+                            test_run=iteration,
+                            pass_fail='FAIL',
+                            fail_description='Re-login failed after exception',
+                            screenshot_path=''
+                        )
+
+                        results.append({
+                            'run': iteration,
+                            'device_count': False,
+                            'sensor_sequence': False,
+                            'status': 'FAILED (login error)'
+                        })
+                        continue
+
+                    last_refresh_time = time.time()
+
+                    # Retry the test
+                    print(f'\n[RETRY] Re-running test {iteration} after recovery...')
+
+                    device_count_result = verify_device_count(page)
+                    sensor_sequence_result = verify_sensor_sequence(page)
+
+                    overall_pass = device_count_result['pass'] and sensor_sequence_result['pass']
+
+                    # Build fail description and capture screenshot if failed
+                    fail_description = ''
+                    screenshot_path = ''
+                    if not overall_pass:
+                        fail_description = build_fail_description(device_count_result, sensor_sequence_result)
+                        screenshot_path = capture_failure_screenshot(page, iteration)
+
+                    # Write to Excel report
+                    write_test_result_to_excel(
+                        test_run=iteration,
+                        pass_fail='PASS (after retry)' if overall_pass else 'FAIL (after retry)',
+                        fail_description=fail_description,
+                        screenshot_path=screenshot_path
+                    )
+
+                    # Record results for final summary
+                    results.append({
+                        'run': iteration,
+                        'device_count': device_count_result['pass'],
+                        'sensor_sequence': sensor_sequence_result['pass'],
+                        'status': 'PASS (after retry)' if overall_pass else 'FAIL (after retry)'
+                    })
+
+                    print(f'\n[RUN {iteration}] Result after retry: {"✓ PASS" if overall_pass else "✗ FAIL"}')
+
+                except Exception as retry_e:
+                    print(f'[ERROR] Retry also failed: {str(retry_e)}')
+
+                    # Write failure to Excel
+                    write_test_result_to_excel(
+                        test_run=iteration,
+                        pass_fail='FAIL',
+                        fail_description=f'Exception during retry: {str(retry_e)}',
+                        screenshot_path=''
+                    )
+
+                    results.append({
+                        'run': iteration,
+                        'device_count': False,
+                        'sensor_sequence': False,
+                        'status': 'FAILED (exception)'
+                    })
+
+            # Wait interval before next run (except for last iteration)
+            if iteration < config['iterations']:
+                wait_with_countdown(config['interval_seconds'])
+
+        # Step 5: Print final summary
+        print_final_summary(results, exception_count, start_time)
 
         # Keep browser open
         input('\nPress Enter to close browser and exit...')
         browser.close()
 
     print('\n[WORKFLOW] Test Case 1 completed!\n')
-    return overall_result
 
 
 if __name__ == '__main__':
