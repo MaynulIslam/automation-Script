@@ -3,7 +3,8 @@ import pytest
 from playwright.sync_api import Page, expect
 import time
 import re
-from test_air_quality_stations import display_air_quality_stations, layout_air_quality_station, layout_combination
+import asyncio
+from test_air_quality_stations import display_air_quality_stations, layout_air_quality_station, layout_combination, change_layout
 
 
 def test_login(page: Page):
@@ -194,3 +195,6 @@ def test_dashboard(page: Page):
 
     # Generate 5 random combinations from Combination 1
     layout_combination()
+
+    # Apply Combination 2 to all devices via MQTT
+    change_layout(page, combination_name='Combination 2')

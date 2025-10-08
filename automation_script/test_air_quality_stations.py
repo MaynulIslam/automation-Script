@@ -6,6 +6,8 @@ import pandas as pd
 import os
 import random
 from datetime import datetime
+import paho.mqtt.client as mqtt
+import json
 
 
 def display_air_quality_stations(page: Page):
@@ -776,4 +778,454 @@ def check_aqs_sensor_sequence(page: Page, iterations: int):
 
     print('\n' + '='*70)
     print(f'[COMPLETE] Sensor sequence check completed {iterations} time(s)')
+    print('='*70 + '\n')
+
+
+def change_layout(page: Page, combination_name='Combination 2'):
+    """
+    Change device layouts using specified Combination from Excel via MQTT
+
+    Args:
+        page: Playwright page object
+        combination_name: Which combination to use (e.g., 'Combination 2', 'Combination 3', etc.)
+    """
+
+    print('\n' + '='*70)
+    print(f'FUNCTION: Change Layout via MQTT ({combination_name})')
+    print('='*70)
+
+    # MQTT Configuration
+    MQTT_BROKER_HOST = '192.168.10.232'
+    MQTT_BROKER_PORT = 8083
+
+    # MQTT Client Setup
+    mqtt_connected = False
+    mqtt_publish_success = {}
+
+    def on_connect(client, userdata, flags, rc, properties=None):
+        nonlocal mqtt_connected
+        if rc == 0:
+            print('[INFO] Connected to MQTT broker')
+            mqtt_connected = True
+        else:
+            print(f'[ERROR] Connection failed with code {rc}')
+
+    def on_publish(client, userdata, mid, properties=None):
+        mqtt_publish_success[mid] = True
+        print(f'[INFO] Message published successfully (mid: {mid})')
+
+    # Create MQTT client with WebSocket transport
+    client_id = f"python-automation-{int(datetime.now().timestamp())}"
+    mqtt_client = mqtt.Client(client_id=client_id, transport="websockets")
+    mqtt_client.on_connect = on_connect
+    mqtt_client.on_publish = on_publish
+
+    # Connect to MQTT broker
+    try:
+        print(f'[INFO] Connecting to MQTT broker at {MQTT_BROKER_HOST}:{MQTT_BROKER_PORT}...')
+        mqtt_client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, 60)
+        mqtt_client.loop_start()
+
+        # Wait for connection
+        timeout = 10
+        start = time.time()
+        while not mqtt_connected and (time.time() - start) < timeout:
+            time.sleep(0.1)
+
+        # Give it a bit more time
+        time.sleep(1)
+
+        if not mqtt_connected:
+            print('[ERROR] Failed to connect to MQTT broker after 10 seconds')
+            mqtt_client.loop_stop()
+            mqtt_client.disconnect()
+            return
+    except Exception as e:
+        print(f'[ERROR] MQTT connection error: {str(e)}')
+        return
+
+    # Read Excel file
+    excel_path = os.path.join(os.path.dirname(__file__), 'air_quality_stations.xlsx')
+
+    try:
+        layout_df = pd.read_excel(excel_path, sheet_name='Layout')
+        print(f'[INFO] Loaded {len(layout_df)} devices from Excel')
+    except Exception as e:
+        print(f'[ERROR] Could not read Excel: {e}')
+        mqtt_client.loop_stop()
+        mqtt_client.disconnect()
+        return
+
+    # Check if combination column exists
+    if combination_name not in layout_df.columns:
+        print(f'[ERROR] Column "{combination_name}" not found in Layout sheet')
+        mqtt_client.loop_stop()
+        mqtt_client.disconnect()
+        return
+
+    # Navigate to Dashboard > Air Quality Stations
+    print('\n[INFO] Navigating to Air Quality Stations...')
+    try:
+        dashboard_nav = page.get_by_role("button", name="Dashboard").first
+        dashboard_nav.click()
+        page.wait_for_load_state('networkidle')
+        time.sleep(2)
+    except:
+        pass
+
+    # Click on Air Quality Stations tab
+    tabs = page.locator('button[role="tab"]')
+    if tabs.count() > 0:
+        tabs.nth(0).click()
+        time.sleep(2)
+
+    # Process each device
+    success_count = 0
+    failure_count = 0
+
+    for idx, row in layout_df.iterrows():
+        device_name = row['Location']
+        combination = row[combination_name]
+
+        print(f'\n{"="*70}')
+        print(f'Device {idx+1}/{len(layout_df)}: {device_name}')
+        print(f'{"="*70}')
+
+        # Skip if no valid combination
+        if pd.isna(combination) or combination in ['N/A', '']:
+            print(f'  [SKIP] No valid {combination_name}')
+            continue
+
+        try:
+            # Open device Layout tab to get sensor mapping
+            print(f'  [STEP 1] Opening Layout tab to extract sensor data...')
+
+            rows = page.locator('tbody tr')
+            row_elem = rows.nth(idx)
+
+            # Click eye button
+            eye_button = row_elem.locator('td:nth-child(13) button').first
+            if eye_button.is_visible():
+                eye_button.click()
+                time.sleep(2)
+            else:
+                print(f'  [ERROR] Eye button not found')
+                failure_count += 1
+                continue
+
+            # Check if popup opened
+            dialog = page.locator('[role="dialog"]').first
+            if not dialog.is_visible(timeout=5000):
+                print(f'  [ERROR] Popup not opened')
+                failure_count += 1
+                continue
+
+            # Click Layout tab
+            layout_tab = page.get_by_role("tab", name="Layout")
+            if layout_tab.is_visible(timeout=3000):
+                layout_tab.click()
+                time.sleep(2)
+            else:
+                print(f'  [ERROR] Layout tab not found')
+                # Close popup
+                close_buttons = dialog.locator('button:has(svg)').all()
+                for btn in close_buttons:
+                    if btn.is_visible():
+                        btn.click()
+                        break
+                failure_count += 1
+                continue
+
+            # Extract sensor data from React state
+            print(f'  [STEP 2] Extracting sensor data from React state...')
+            sensor_data = page.evaluate("""
+                () => {
+                    // Find the React Fiber node containing the board state
+                    const dialog = document.querySelector('[role="dialog"]');
+                    if (!dialog) return null;
+
+                    const fiberKey = Object.keys(dialog).find(key =>
+                        key.startsWith('__reactFiber')
+                    );
+
+                    if (!fiberKey) return null;
+
+                    let fiber = dialog[fiberKey];
+
+                    // Traverse up to find the component with board state
+                    while (fiber) {
+                        if (fiber.memoizedState?.board?.tasks) {
+                            const tasks = fiber.memoizedState.board.tasks;
+                            return Object.values(tasks).map(task => ({
+                                name: task.name,
+                                sensor_id: task.sensor_id,
+                                config_type: task.config_type,
+                                location: task.location || '',
+                                obj: task.obj || {},
+                                selectedItems: task.selectedItems || []
+                            }));
+                        }
+                        fiber = fiber.return;
+                    }
+
+                    return null;
+                }
+            """)
+
+            if not sensor_data:
+                print(f'  [ERROR] Could not extract sensor data')
+                # Close popup
+                close_buttons = dialog.locator('button:has(svg)').all()
+                for btn in close_buttons:
+                    if btn.is_visible():
+                        btn.click()
+                        break
+                failure_count += 1
+                continue
+
+            # Convert list to dict keyed by name
+            sensor_mapping = {}
+            for sensor in sensor_data:
+                sensor_mapping[sensor['name']] = sensor
+
+            print(f'  [OK] Found {len(sensor_mapping)} sensors')
+
+            # Get device_id from React state
+            device_id = page.evaluate("""
+                () => {
+                    // Try to find device_id from component props
+                    const dialog = document.querySelector('[role="dialog"]');
+                    if (!dialog) return null;
+
+                    const fiberKey = Object.keys(dialog).find(key =>
+                        key.startsWith('__reactFiber')
+                    );
+
+                    if (!fiberKey) return null;
+
+                    let fiber = dialog[fiberKey];
+                    while (fiber) {
+                        if (fiber.memoizedProps?.deviceId) {
+                            return fiber.memoizedProps.deviceId;
+                        }
+                        fiber = fiber.return;
+                    }
+                    return null;
+                }
+            """)
+
+            # Get device_type from React state
+            device_type = page.evaluate("""
+                () => {
+                    const dialog = document.querySelector('[role="dialog"]');
+                    if (!dialog) return null;
+
+                    const fiberKey = Object.keys(dialog).find(key =>
+                        key.startsWith('__reactFiber')
+                    );
+
+                    if (!fiberKey) return null;
+
+                    let fiber = dialog[fiberKey];
+                    while (fiber) {
+                        if (fiber.memoizedProps?.deviceType) {
+                            return fiber.memoizedProps.deviceType;
+                        }
+                        fiber = fiber.return;
+                    }
+                    return 'vaqs';  // Default
+                }
+            """)
+
+            if not device_id:
+                print(f'  [ERROR] Could not extract device_id')
+                # Close popup
+                close_buttons = dialog.locator('button:has(svg)').all()
+                for btn in close_buttons:
+                    if btn.is_visible():
+                        btn.click()
+                        break
+                failure_count += 1
+                continue
+
+            print(f'  [INFO] Device ID: {device_id}')
+            print(f'  [INFO] Device Type: {device_type}')
+
+            # Parse combination from Excel
+            print(f'  [STEP 3] Parsing {combination_name}...')
+
+            # Parse combination string: "1.PM 2.5 μm, 2.Temp, 3.Humidity, ..."
+            parts = combination.split(',')
+            parsed_sensors = []
+            climate_items = ['Temp', 'Temperature', 'Humidity', 'Wet Bulb', 'Wetbulb', 'WBGT']
+
+            for part in parts:
+                part = part.strip()
+                if '.' not in part:
+                    continue
+
+                # Split "1.PM 2.5 μm" into position and sensor name
+                _, sensor_name = part.split('.', 1)
+                sensor_name = sensor_name.strip()
+
+                # Check if this is a climate sensor component
+                if sensor_name in climate_items:
+                    parsed_sensors.append({
+                        'sensor': 'Climate',
+                        'climate_item': sensor_name
+                    })
+                else:
+                    parsed_sensors.append({
+                        'sensor': sensor_name,
+                        'climate_item': None
+                    })
+
+            print(f'  [OK] Parsed {len(parsed_sensors)} sensors')
+
+            # Build MQTT payload
+            print(f'  [STEP 4] Building MQTT payload...')
+
+            sensor_priority_list = []
+            climate_selected_items = []
+            climate_added = False
+
+            for parsed in parsed_sensors:
+                if parsed['climate_item']:
+                    # Collect climate items
+                    climate_selected_items.append(parsed['climate_item'])
+                else:
+                    # Add any pending climate sensor first
+                    if climate_selected_items and not climate_added:
+                        climate_sensor = sensor_mapping.get('Climate Sensor') or sensor_mapping.get('Climate')
+                        if climate_sensor:
+                            # Normalize climate item names
+                            normalized_items = []
+                            for item in climate_selected_items:
+                                if item in ['Temp', 'Temperature']:
+                                    normalized_items.append('Temp')
+                                elif item in ['Wet Bulb', 'Wetbulb']:
+                                    normalized_items.append('Wet Bulb')
+                                else:
+                                    normalized_items.append(item)
+
+                            # Sort by standard order
+                            sort_order = ["Temp", "Humidity", "Wet Bulb", "WBGT"]
+                            normalized_items = sorted(normalized_items, key=lambda x: sort_order.index(x) if x in sort_order else 999)
+
+                            sensor_priority_list.append({
+                                'id': climate_sensor['sensor_id'],
+                                'config_type': climate_sensor.get('obj', {}).get('name', 'Climate Sensor'),
+                                'name': 'Climate Sensor',
+                                'location': climate_sensor.get('obj', {}).get('location', ''),
+                                'selectedItems': normalized_items
+                            })
+                            climate_added = True
+                            climate_selected_items = []
+
+                    # Add regular sensor
+                    sensor_info = sensor_mapping.get(parsed['sensor'])
+                    if sensor_info:
+                        sensor_priority_list.append({
+                            'id': sensor_info['sensor_id'],
+                            'config_type': sensor_info.get('obj', {}).get('name', parsed['sensor']),
+                            'name': parsed['sensor'],
+                            'location': sensor_info.get('obj', {}).get('location', ''),
+                            'selectedItems': []
+                        })
+                    else:
+                        print(f'  [WARN] Sensor not found: {parsed["sensor"]}')
+
+            # Add any remaining climate items
+            if climate_selected_items:
+                climate_sensor = sensor_mapping.get('Climate Sensor') or sensor_mapping.get('Climate')
+                if climate_sensor:
+                    normalized_items = []
+                    for item in climate_selected_items:
+                        if item in ['Temp', 'Temperature']:
+                            normalized_items.append('Temp')
+                        elif item in ['Wet Bulb', 'Wetbulb']:
+                            normalized_items.append('Wet Bulb')
+                        else:
+                            normalized_items.append(item)
+
+                    sort_order = ["Temp", "Humidity", "Wet Bulb", "WBGT"]
+                    normalized_items = sorted(normalized_items, key=lambda x: sort_order.index(x) if x in sort_order else 999)
+
+                    sensor_priority_list.append({
+                        'id': climate_sensor['sensor_id'],
+                        'config_type': climate_sensor.get('obj', {}).get('name', 'Climate Sensor'),
+                        'name': 'Climate Sensor',
+                        'location': climate_sensor.get('obj', {}).get('location', ''),
+                        'selectedItems': normalized_items
+                    })
+
+            payload = {
+                'device_id': device_id,
+                'device_type': device_type,
+                'sensor_priority': sensor_priority_list
+            }
+
+            print(f'  [INFO] Payload: {len(payload["sensor_priority"])} sensors configured')
+
+            # Publish to MQTT
+            print(f'  [STEP 5] Publishing to MQTT...')
+            topic = f'duetto_analytics/aqs/sensor_priority/{device_id}'
+
+            result = mqtt_client.publish(topic, json.dumps(payload))
+
+            if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                print(f'  [SUCCESS] Published to MQTT topic: {topic}')
+                success_count += 1
+
+                # Wait a bit for MQTT to process
+                time.sleep(1)
+
+                # Also publish realtime update (like frontend does)
+                realtime_payload = {
+                    'device_id': device_id,
+                    'device_type': device_type,
+                    'sensor_priority': sensor_priority_list,
+                    'timestamp': datetime.now().isoformat()
+                }
+                mqtt_client.publish('maestrolink/realtime/priority_update', json.dumps(realtime_payload))
+
+            else:
+                print(f'  [FAIL] Failed to publish to MQTT (rc: {result.rc})')
+                failure_count += 1
+
+            # Close popup
+            close_buttons = dialog.locator('button:has(svg)').all()
+            for btn in close_buttons:
+                if btn.is_visible():
+                    btn.click()
+                    time.sleep(1)
+                    break
+
+        except Exception as e:
+            print(f'  [ERROR] Exception: {str(e)[:200]}')
+            failure_count += 1
+
+            # Try to close any open popup
+            try:
+                close_buttons = page.locator('[role="dialog"] button:has(svg)').all()
+                for btn in close_buttons:
+                    if btn.is_visible():
+                        btn.click()
+                        break
+            except:
+                pass
+
+    # Disconnect MQTT
+    mqtt_client.loop_stop()
+    mqtt_client.disconnect()
+    print('\n[INFO] Disconnected from MQTT broker')
+
+    # Summary
+    print('\n' + '='*70)
+    print('SUMMARY')
+    print('='*70)
+    print(f'Total devices: {len(layout_df)}')
+    print(f'Success: {success_count}')
+    print(f'Failed: {failure_count}')
+    print(f'Skipped: {len(layout_df) - success_count - failure_count}')
     print('='*70 + '\n')
