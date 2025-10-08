@@ -2,7 +2,25 @@
   "permissions": {
     "allow": [
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git remote add:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)",
+      "Bash(npm install)",
+      "Bash(pip install:*)",
+      "Bash(pytest:*)",
+      "Bash(allure serve:*)",
+      "Read(//c/Users/maynul.islam/**)",
+      "Bash(cd:*)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "WebSearch",
+      "WebFetch(domain:wanago.io)",
+      "WebFetch(domain:github.com)",
+      "Bash(python:*)",
+      "Bash(psql:*)",
+      "Bash(where psql)"
     ],
     "deny": [],
     "ask": []
