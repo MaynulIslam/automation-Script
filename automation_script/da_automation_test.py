@@ -189,11 +189,119 @@ def data_fetch():
         print('='*70 + '\n')
 
 
-def test_AQS(page):
-    """Test Air Quality Stations tab - verify device count and sensor sequence"""
+def verify_device_count(page):
+    """Verify Air Quality Stations tab has correct number of devices"""
 
     print('\n' + '='*70)
-    print('TEST: Air Quality Stations Tab Verification')
+    print('TEST CASE 1: Device Quantity Verification')
+    print('='*70)
+
+    # STEP 1: Load expected data from Excel
+    print('\n[STEP 1] Loading expected data from Excel...')
+    excel_path = os.path.join(os.path.dirname(__file__), 'excel_container.xlsx')
+
+    devices_df = pd.read_excel(excel_path, sheet_name='list of devices')
+
+    # Filter AQS devices (device_type_id = 3, 4, 5)
+    aqs_devices = devices_df[devices_df['device_type_id'].isin([3, 4, 5])].copy()
+    aqs_devices = aqs_devices.sort_values('id')
+
+    print(f'[INFO] Expected AQS devices: {len(aqs_devices)}')
+    for _, device in aqs_devices.iterrows():
+        print(f'  - Device ID {device["id"]}: {device["device_name"]} (type_id: {device["device_type_id"]})')
+
+    # STEP 2: Navigate to Dashboard
+    print('\n[STEP 2] Navigating to Dashboard...')
+
+    # Check if already on dashboard, if not navigate
+    try:
+        dashboard_btn = page.get_by_role("button", name="Dashboard")
+        if dashboard_btn.count() > 0:
+            print('[INFO] Already logged in, clicking Dashboard...')
+            dashboard_btn.click()
+            page.wait_for_load_state('networkidle')
+            time.sleep(2)
+    except:
+        print('[ERROR] Not logged in or Dashboard button not found')
+        return False
+
+    # STEP 3: Verify we're on Air Quality Stations tab (Tab 0 - should be default)
+    print('\n[STEP 3] Verifying Air Quality Stations tab...')
+
+    # Wait for table to load
+    try:
+        page.wait_for_selector('table tbody tr', timeout=10000)
+        time.sleep(2)  # Extra wait for data to populate
+    except:
+        print('[ERROR] Table not found or not loaded')
+        return False
+
+    # STEP 4: Count devices in frontend
+    print('\n[STEP 4] Counting devices in frontend...')
+
+    # Get all table rows
+    table_rows = page.locator('table tbody tr')
+    actual_device_count = table_rows.count()
+
+    print(f'[INFO] Found devices in frontend: {actual_device_count}')
+
+    # STEP 5: Extract and verify device names
+    print('\n[STEP 5] Verifying device list...')
+
+    expected_device_names = set(aqs_devices['device_name'].tolist())
+    found_device_names = set()
+
+    for row_idx in range(actual_device_count):
+        row = table_rows.nth(row_idx)
+        try:
+            device_name_cell = row.locator('td').nth(1)
+            device_name_text = device_name_cell.inner_text().split('\n')[0].strip()
+            found_device_names.add(device_name_text)
+            print(f'  ✓ Found: {device_name_text}')
+        except Exception as e:
+            print(f'  ✗ Error reading device at row {row_idx}: {str(e)}')
+
+    # STEP 6: Compare results
+    print('\n[STEP 6] Comparison Results...')
+
+    missing_devices = expected_device_names - found_device_names
+    extra_devices = found_device_names - expected_device_names
+
+    count_match = actual_device_count == len(aqs_devices)
+    list_match = len(missing_devices) == 0 and len(extra_devices) == 0
+
+    if missing_devices:
+        print(f'[WARN] Missing devices: {missing_devices}')
+
+    if extra_devices:
+        print(f'[WARN] Extra devices not in database: {extra_devices}')
+
+    # STEP 7: Summary
+    print('\n' + '='*70)
+    print('TEST CASE 1 SUMMARY')
+    print('='*70)
+    print(f'Expected device count: {len(aqs_devices)}')
+    print(f'Actual device count: {actual_device_count}')
+    print(f'Device count match: {"✓ PASS" if count_match else "✗ FAIL"}')
+    print(f'Device list match: {"✓ PASS" if list_match else "✗ FAIL"}')
+
+    overall_pass = count_match and list_match
+
+    if overall_pass:
+        print('\n[OVERALL RESULT] ✓ PASS - Device quantity verification passed!')
+    else:
+        print('\n[OVERALL RESULT] ✗ FAIL - Device quantity verification failed')
+
+    print('='*70 + '\n')
+
+    return overall_pass
+
+
+def verify_sensor_sequence(page):
+    """Verify sensor sequence for each device on Air Quality Stations tab"""
+
+    print('\n' + '='*70)
+    print('TEST CASE 2: Sensor Sequence Verification')
     print('='*70)
 
     # STEP 1: Load expected data from Excel
@@ -206,10 +314,6 @@ def test_AQS(page):
     # Filter AQS devices (device_type_id = 3, 4, 5)
     aqs_devices = devices_df[devices_df['device_type_id'].isin([3, 4, 5])].copy()
     aqs_devices = aqs_devices.sort_values('id')
-
-    print(f'[INFO] Expected AQS devices: {len(aqs_devices)}')
-    for _, device in aqs_devices.iterrows():
-        print(f'  - Device ID {device["id"]}: {device["device_name"]} (type_id: {device["device_type_id"]})')
 
     # Prepare expected sensor sequences for each device
     expected_data = {}
@@ -254,6 +358,8 @@ def test_AQS(page):
             'sensors': expected_sensors
         }
 
+    print(f'[INFO] Testing sensor sequences for {len(expected_data)} devices')
+
     # STEP 2: Navigate to Dashboard
     print('\n[STEP 2] Navigating to Dashboard...')
 
@@ -267,7 +373,7 @@ def test_AQS(page):
             time.sleep(2)
     except:
         print('[ERROR] Not logged in or Dashboard button not found')
-        return
+        return False
 
     # STEP 3: Verify we're on Air Quality Stations tab (Tab 0 - should be default)
     print('\n[STEP 3] Verifying Air Quality Stations tab...')
@@ -278,25 +384,14 @@ def test_AQS(page):
         time.sleep(2)  # Extra wait for data to populate
     except:
         print('[ERROR] Table not found or not loaded')
-        return
+        return False
 
-    # STEP 4: Count devices in frontend
-    print('\n[STEP 4] Counting devices in frontend...')
-
-    # Get all table rows
+    # STEP 4: Get table rows
     table_rows = page.locator('table tbody tr')
     actual_device_count = table_rows.count()
 
-    print(f'[INFO] Found devices in frontend: {actual_device_count}')
-
-    # Compare device counts
-    if actual_device_count == len(aqs_devices):
-        print(f'[PASS] Device count matches! Expected: {len(aqs_devices)}, Found: {actual_device_count}')
-    else:
-        print(f'[FAIL] Device count mismatch! Expected: {len(aqs_devices)}, Found: {actual_device_count}')
-
     # STEP 5: Verify sensor sequence for each device
-    print('\n[STEP 5] Verifying sensor sequences...')
+    print('\n[STEP 4] Verifying sensor sequences...')
     print('-' * 70)
 
     passed_devices = 0
@@ -306,7 +401,6 @@ def test_AQS(page):
         row = table_rows.nth(row_idx)
 
         # Extract device name from Location column (2nd column, index 1)
-        # The device name is in a link within ListItemText
         try:
             device_name_cell = row.locator('td').nth(1)
             device_name_text = device_name_cell.inner_text().split('\n')[0].strip()
@@ -381,25 +475,29 @@ def test_AQS(page):
 
     # STEP 6: Summary
     print('\n' + '='*70)
-    print('TEST SUMMARY')
+    print('TEST CASE 2 SUMMARY')
     print('='*70)
     print(f'Total devices tested: {passed_devices + failed_devices}')
     print(f'Passed: {passed_devices}')
     print(f'Failed: {failed_devices}')
 
-    if failed_devices == 0 and actual_device_count == len(aqs_devices):
-        print('\n[OVERALL RESULT] ✓ PASS - All verifications passed!')
+    overall_pass = failed_devices == 0
+
+    if overall_pass:
+        print('\n[OVERALL RESULT] ✓ PASS - All sensor sequences verified!')
     else:
-        print('\n[OVERALL RESULT] ✗ FAIL - Some verifications failed')
+        print('\n[OVERALL RESULT] ✗ FAIL - Some sensor sequences failed')
 
     print('='*70 + '\n')
 
+    return overall_pass
 
-def run_full_test():
-    """Run complete test workflow: login → data_fetch → test_AQS"""
+
+def test_case_one():
+    """Test Case 1: Verify device quantity and sensor sequence on Air Quality Stations tab"""
 
     print('\n' + '#'*70)
-    print('# DUETTO ANALYTICS - FULL TEST WORKFLOW')
+    print('# TEST CASE 1: Air Quality Stations Verification')
     print('#'*70 + '\n')
 
     # Step 1: Fetch latest data from database
@@ -481,17 +579,36 @@ def run_full_test():
             browser.close()
             return
 
-        # Step 3: Run test_AQS
-        print('\n[WORKFLOW] Step 3: Running Air Quality Stations verification...')
-        test_AQS(page)
+        # Step 3: Run device count verification
+        print('\n[WORKFLOW] Step 3: Running device quantity verification...')
+        result1 = verify_device_count(page)
+
+        # Step 4: Run sensor sequence verification
+        print('\n[WORKFLOW] Step 4: Running sensor sequence verification...')
+        result2 = verify_sensor_sequence(page)
+
+        # Final Summary
+        print('\n' + '#'*70)
+        print('# TEST CASE 1 FINAL SUMMARY')
+        print('#'*70)
+        print(f'Device Quantity Verification: {"✓ PASS" if result1 else "✗ FAIL"}')
+        print(f'Sensor Sequence Verification: {"✓ PASS" if result2 else "✗ FAIL"}')
+
+        overall_result = result1 and result2
+        if overall_result:
+            print('\n[OVERALL RESULT] ✓✓ TEST CASE 1 PASSED!')
+        else:
+            print('\n[OVERALL RESULT] ✗✗ TEST CASE 1 FAILED')
+        print('#'*70 + '\n')
 
         # Keep browser open
         input('\nPress Enter to close browser and exit...')
         browser.close()
 
-    print('\n[WORKFLOW] Test workflow completed!\n')
+    print('\n[WORKFLOW] Test Case 1 completed!\n')
+    return overall_result
 
 
 if __name__ == '__main__':
-    # Run the full test workflow
-    run_full_test()
+    # Run test case one
+    test_case_one()
