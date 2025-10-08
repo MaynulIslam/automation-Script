@@ -4,6 +4,8 @@ from playwright.sync_api import Page, expect
 import time
 import pandas as pd
 import os
+import random
+from datetime import datetime
 
 
 def display_air_quality_stations(page: Page):
@@ -164,7 +166,7 @@ def layout_air_quality_station(page: Page):
     # Prepare data for Layout sheet
     layout_data = {
         'Location': [],
-        'Configured Order': []
+        'Combination 1': []
     }
 
     # Loop through each device
@@ -205,7 +207,7 @@ def layout_air_quality_station(page: Page):
                 if not dialog.is_visible(timeout=5000):
                     print(f'  [WARN] Detail popup did not open for {location}')
                     layout_data['Location'].append(location)
-                    layout_data['Configured Order'].append('N/A - Popup not opened')
+                    layout_data['Combination 1'].append('N/A - Popup not opened')
                     continue
 
                 print('  [OK] Detail popup opened')
@@ -220,7 +222,7 @@ def layout_air_quality_station(page: Page):
                 else:
                     print('  [WARN] Layout tab not found')
                     layout_data['Location'].append(location)
-                    layout_data['Configured Order'].append('N/A - Layout tab not found')
+                    layout_data['Combination 1'].append('N/A - Layout tab not found')
                     # Close popup
                     try:
                         close_buttons = dialog.locator('button:has(svg)').all()
@@ -337,7 +339,7 @@ def layout_air_quality_station(page: Page):
                     print(f'  [WARN] No configured sensors found')
 
                 layout_data['Location'].append(location)
-                layout_data['Configured Order'].append(configured_order_str)
+                layout_data['Combination 1'].append(configured_order_str)
 
                 # Close the popup - using the close button with svg icon
                 # The close button is typically in the dialog header
@@ -365,7 +367,7 @@ def layout_air_quality_station(page: Page):
             except Exception as e:
                 print(f'  [ERROR] Failed to process layout for {location}: {str(e)[:100]}')
                 layout_data['Location'].append(location)
-                layout_data['Configured Order'].append(f'Error: {str(e)[:50]}')
+                layout_data['Combination 1'].append(f'Error: {str(e)[:50]}')
 
                 # Try to close any open dialog
                 try:
@@ -405,3 +407,373 @@ def layout_air_quality_station(page: Page):
         print(f'\n[ERROR] Failed to write Layout data to Excel: {str(e)}')
 
     print('\n' + '='*70 + '\n')
+
+
+def layout_combination():
+    """Generate 5 additional combinations from Combination 1 in Layout sheet"""
+
+    print('\n' + '='*70)
+    print('FUNCTION: Generate Layout Combinations')
+    print('='*70)
+
+    excel_path = os.path.join(os.path.dirname(__file__), 'air_quality_stations.xlsx')
+
+    # Check if Excel file exists
+    if not os.path.exists(excel_path):
+        print(f'[ERROR] Excel file not found: {excel_path}')
+        print('[INFO] Please run layout_air_quality_station first to generate the file')
+        return
+
+    # Read existing Layout sheet
+    try:
+        layout_df = pd.read_excel(excel_path, sheet_name='Layout')
+        print(f'[INFO] Loaded Layout sheet with {len(layout_df)} devices')
+    except Exception as e:
+        print(f'[ERROR] Could not read Layout sheet: {str(e)}')
+        return
+
+    # Check if Combination 1 exists
+    if 'Combination 1' not in layout_df.columns:
+        print('[ERROR] Combination 1 column not found in Layout sheet')
+        return
+
+    # Prepare new combination columns
+    layout_df['Combination 2'] = ''
+    layout_df['Combination 3'] = ''
+    layout_df['Combination 4'] = ''
+    layout_df['Combination 5'] = ''
+    layout_df['Combination 6'] = ''
+
+    # Generate combinations for each device
+    for idx, row in layout_df.iterrows():
+        device_name = row['Location']
+        combination_1 = row['Combination 1']
+
+        print(f'\n[INFO] Processing device: {device_name}')
+
+        # Parse Combination 1
+        if isinstance(combination_1, str) and combination_1 not in ['N/A - Popup not opened', 'N/A - Layout tab not found', 'No sensors configured'] and not str(combination_1).startswith('Error'):
+
+            # Split by comma to get individual sensors
+            parts = combination_1.split(',')
+            sensor_list = []
+
+            for part in parts:
+                part = part.strip()
+                # Remove the number prefix (e.g., "1.") to get sensor data
+                if '.' in part:
+                    sensor_data = part.split('.', 1)[1].strip()
+                    sensor_list.append(sensor_data)
+
+            if len(sensor_list) > 0:
+                print(f'  Found {len(sensor_list)} sensors in Combination 1')
+
+                # Generate 5 random combinations
+                for combo_num in range(2, 7):
+                    # Shuffle the sensor list
+                    shuffled = sensor_list.copy()
+                    random.shuffle(shuffled)
+
+                    # Format as "1.sensor, 2.sensor, 3.sensor..."
+                    combination = ', '.join([f"{i+1}.{sensor}" for i, sensor in enumerate(shuffled)])
+
+                    # Store in dataframe
+                    layout_df.at[idx, f'Combination {combo_num}'] = combination
+
+                print(f'  [OK] Generated 5 combinations for {device_name}')
+            else:
+                print(f'  [WARN] No sensors found in Combination 1 for {device_name}')
+                for combo_num in range(2, 7):
+                    layout_df.at[idx, f'Combination {combo_num}'] = 'N/A'
+        else:
+            print(f'  [WARN] Invalid Combination 1 for {device_name}: {combination_1}')
+            for combo_num in range(2, 7):
+                layout_df.at[idx, f'Combination {combo_num}'] = 'N/A'
+
+    # Write back to Excel
+    try:
+        # Read the Air Quality Stations sheet to preserve it
+        aqs_df = pd.read_excel(excel_path, sheet_name='Air Quality Stations')
+
+        # Write both sheets
+        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+            aqs_df.to_excel(writer, sheet_name='Air Quality Stations', index=False)
+            layout_df.to_excel(writer, sheet_name='Layout', index=False)
+
+        print(f'\n[SUCCESS] Updated Layout sheet with 5 new combinations')
+        print(f'[INFO] Excel file: {excel_path}')
+
+    except Exception as e:
+        print(f'\n[ERROR] Failed to write to Excel: {str(e)}')
+
+    print('\n' + '='*70 + '\n')
+
+
+def check_aqs_sensor_sequence(page: Page, iterations: int):
+    """Check if Air Quality Stations sensors match the expected Layout sequence
+
+    Args:
+        page: Playwright page object
+        iterations: Number of times to run the sensor sequence check
+    """
+
+    print('\n' + '='*70)
+    print('FUNCTION: Check AQS Sensor Sequence')
+    print('='*70)
+
+    print(f'\n[INFO] Will run sensor sequence check {iterations} time(s)')
+    print('[INFO] Each check will refresh the Air Quality Stations table and compare with Layout')
+    print('[INFO] Waiting 10 minutes between each check...\n')
+
+    excel_path = os.path.join(os.path.dirname(__file__), 'air_quality_stations.xlsx')
+
+    # Create Fault_ss folder if it doesn't exist
+    fault_ss_folder = os.path.join(os.path.dirname(__file__), 'Fault_ss')
+    if not os.path.exists(fault_ss_folder):
+        os.makedirs(fault_ss_folder)
+        print(f'[INFO] Created folder: {fault_ss_folder}')
+
+    for iteration in range(1, iterations + 1):
+        print('\n' + '='*70)
+        print(f'ITERATION {iteration}/{iterations}')
+        print('='*70)
+
+        # Navigate to dashboard and Air Quality Stations tab
+        print('\n[INFO] Navigating to Air Quality Stations tab...')
+        try:
+            dashboard_nav = page.get_by_role("button", name="Dashboard").first
+            dashboard_nav.click()
+            page.wait_for_load_state('networkidle')
+            time.sleep(2)
+        except:
+            pass
+
+        # Click on Air Quality Stations tab
+        tabs = page.locator('button[role="tab"]')
+        if tabs.count() > 0:
+            tabs.nth(0).click()
+            time.sleep(2)
+
+        # Get all rows
+        rows = page.locator('tbody tr')
+        row_count = rows.count()
+        print(f'[INFO] Found {row_count} devices\n')
+
+        if row_count == 0:
+            print('[INFO] No devices found in Air Quality Stations tab')
+            continue
+
+        # Prepare data for Air Quality Stations sheet (fresh data)
+        data = {
+            'Image': [],
+            'Location': [],
+            'Sensor 1': [],
+            'Sensor 2': [],
+            'Sensor 3': [],
+            'Sensor 4': [],
+            'Sensor 5': [],
+            'Sensor 6': [],
+            'Sensor 7': [],
+            'Sensor 8': [],
+            'Sensor 9': [],
+            'Sensor 10': [],
+            'Actions': [],
+            'Sensor Set 1': []
+        }
+
+        # Read Layout sheet to get expected sequences
+        layout_df = None
+        try:
+            layout_df = pd.read_excel(excel_path, sheet_name='Layout')
+            print('[INFO] Loaded Layout sheet for comparison')
+        except Exception as e:
+            print(f'[ERROR] Could not read Layout sheet: {str(e)[:100]}')
+            print('[WARN] Will collect data without comparison')
+
+        # Extract data from each row
+        for i in range(row_count):
+            try:
+                row = rows.nth(i)
+                cells = row.locator('td')
+                cell_count = cells.count()
+
+                # Column 1: Image
+                col_image = "Image"
+
+                # Column 2: Location
+                col_location = ""
+                if cell_count > 1:
+                    location_text = cells.nth(1).inner_text()
+                    col_location = location_text.replace('\n', ' ').strip()
+
+                # Get device name only (first line)
+                device_name = col_location.split('\n')[0].strip() if '\n' in col_location else col_location
+
+                # Columns 3-12: All 10 sensors
+                sensors = []
+                for j in range(2, min(12, cell_count - 1)):
+                    sensor_text = cells.nth(j).inner_text()
+                    sensor_text = sensor_text.replace('\n', ' ').strip()
+                    sensors.append(sensor_text)
+
+                # Pad sensors list if less than 10
+                while len(sensors) < 10:
+                    sensors.append("")
+
+                # Actions
+                col_actions = "[Link]"
+
+                # Compare with expected sequence from Layout
+                sensor_set_result = "N/A"
+                if layout_df is not None:
+                    try:
+                        # Find this device in Layout sheet
+                        # Try exact match first
+                        matching_row = layout_df[layout_df['Location'] == device_name]
+
+                        # If no exact match, try partial match (contains)
+                        if matching_row.empty:
+                            matching_row = layout_df[layout_df['Location'].str.contains(device_name, na=False, regex=False)]
+
+                        # If still no match, try reverse - check if device_name contains any Layout location
+                        if matching_row.empty:
+                            for idx, row in layout_df.iterrows():
+                                layout_location = str(row['Location']).strip()
+                                if layout_location in device_name or device_name in layout_location:
+                                    matching_row = layout_df.iloc[[idx]]
+                                    break
+
+                        if not matching_row.empty:
+                            expected_sequence = matching_row.iloc[0]['Combination 1']
+                            print(f'  [DEBUG] Matched device: "{device_name}" with Layout location: "{matching_row.iloc[0]["Location"]}"')
+
+                            # Parse expected sequence: "1.CO 0-500 ppm, 2.NO2 0-20 ppm, ..."
+                            expected_sensors = []
+                            if isinstance(expected_sequence, str) and expected_sequence not in ['N/A - Popup not opened', 'N/A - Layout tab not found', 'No sensors configured']:
+                                parts = expected_sequence.split(',')
+                                for part in parts:
+                                    part = part.strip()
+                                    # Remove the number prefix (e.g., "1.")
+                                    if '.' in part:
+                                        sensor_name = part.split('.', 1)[1].strip()
+                                        expected_sensors.append(sensor_name)
+
+                            # Compare actual vs expected
+                            matching_count = 0
+                            not_matching_count = 0
+
+                            for idx, (actual, expected) in enumerate(zip(sensors, expected_sensors)):
+                                if not expected:
+                                    # No expected sensor at this position
+                                    break
+
+                                if actual and expected:
+                                    # Extract sensor name from actual (e.g., "CO 0-500 ppm" -> "CO")
+                                    actual_parts = actual.split()
+                                    expected_parts = expected.split()
+
+                                    actual_name = actual_parts[0] if actual_parts else ""
+                                    expected_name = expected_parts[0] if expected_parts else ""
+
+                                    # Debug output for DRIFT devices
+                                    if 'DRIFT' in device_name:
+                                        print(f'  [DEBUG] Sensor {idx+1}: Actual="{actual}" | Expected="{expected}" | Comparing "{actual_name}" vs "{expected_name}"')
+
+                                    # Normalize sensor names for comparison (handle abbreviations)
+                                    # Temp -> Temperature, Wet -> Wetbulb, etc.
+                                    sensor_aliases = {
+                                        'temp': 'temperature',
+                                        'temperature': 'temperature',
+                                        'humidity': 'humidity',
+                                        'wet': 'wetbulb',
+                                        'wetbulb': 'wetbulb',
+                                        'wbgt': 'wbgt',
+                                        'twl': 'twl'
+                                    }
+
+                                    # Normalize both names
+                                    actual_normalized = sensor_aliases.get(actual_name.lower(), actual_name.lower())
+                                    expected_normalized = sensor_aliases.get(expected_name.lower(), expected_name.lower())
+
+                                    if actual_normalized == expected_normalized:
+                                        matching_count += 1
+                                    else:
+                                        not_matching_count += 1
+                                        print(f'  [MISMATCH] {device_name} Sensor {idx+1}: Expected "{expected_name}", Got "{actual_name}"')
+                                        print(f'    Full actual: "{actual}" | Full expected: "{expected}"')
+                                elif not actual and expected:
+                                    # Expected sensor but not showing
+                                    not_matching_count += 1
+                                    print(f'  [MISSING] {device_name} Sensor {idx+1}: Expected "{expected}", Got empty')
+
+                            sensor_set_result = f"Sensor Matching: {matching_count}, Not Matching: {not_matching_count}"
+                            print(f'  {device_name}: {sensor_set_result}')
+
+                            # Take screenshot if there are any mismatches
+                            if not_matching_count > 0:
+                                # Generate filename with device name and current time
+                                current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+                                # Clean device name for filename (remove special characters)
+                                safe_device_name = "".join(c for c in device_name if c.isalnum() or c in (' ', '_', '-')).strip()
+                                safe_device_name = safe_device_name.replace(' ', '_')
+                                screenshot_filename = f"{safe_device_name}_{current_time}.png"
+                                screenshot_path = os.path.join(fault_ss_folder, screenshot_filename)
+
+                                try:
+                                    page.screenshot(path=screenshot_path)
+                                    print(f'  [SCREENSHOT] Saved fault screenshot: {screenshot_filename}')
+                                except Exception as ss_error:
+                                    print(f'  [ERROR] Failed to save screenshot: {str(ss_error)[:50]}')
+                        else:
+                            sensor_set_result = "N/A - Device not found in Layout"
+                            print(f'  [WARN] Could not find "{device_name}" in Layout sheet')
+                            print(f'  [DEBUG] Available Layout locations: {list(layout_df["Location"].values)}')
+                    except Exception as e:
+                        sensor_set_result = f"Error: {str(e)[:30]}"
+                        print(f'  [ERROR] Comparison failed for {device_name}: {str(e)[:50]}')
+
+                # Add to data dictionary
+                data['Image'].append(col_image)
+                data['Location'].append(col_location)
+                data['Sensor 1'].append(sensors[0])
+                data['Sensor 2'].append(sensors[1])
+                data['Sensor 3'].append(sensors[2])
+                data['Sensor 4'].append(sensors[3])
+                data['Sensor 5'].append(sensors[4])
+                data['Sensor 6'].append(sensors[5])
+                data['Sensor 7'].append(sensors[6])
+                data['Sensor 8'].append(sensors[7])
+                data['Sensor 9'].append(sensors[8])
+                data['Sensor 10'].append(sensors[9])
+                data['Actions'].append(col_actions)
+                data['Sensor Set 1'].append(sensor_set_result)
+
+            except Exception as e:
+                print(f'[ERROR] Could not process row {i+1}: {str(e)[:100]}')
+
+        # Write to Excel - update Air Quality Stations sheet
+        try:
+            df = pd.DataFrame(data)
+
+            # Read existing file to preserve Layout sheet
+            with pd.ExcelWriter(excel_path, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+                df.to_excel(writer, sheet_name='Air Quality Stations', index=False)
+
+            print(f'\n[SUCCESS] Updated Air Quality Stations sheet with Sensor Set 1 comparison')
+            print(f'[INFO] Iteration {iteration}/{iterations} completed')
+
+        except Exception as e:
+            print(f'\n[ERROR] Failed to write to Excel: {str(e)}')
+
+        # Wait 10 minutes before next iteration (unless it's the last one)
+        if iteration < iterations:
+            print(f'\n[INFO] Waiting 10 minutes before next check...')
+            time.sleep(600)  # 600 seconds = 10 minutes
+            print('[INFO] Refreshing page...')
+            page.reload()
+            page.wait_for_load_state('networkidle')
+            time.sleep(2)
+
+    print('\n' + '='*70)
+    print(f'[COMPLETE] Sensor sequence check completed {iterations} time(s)')
+    print('='*70 + '\n')
