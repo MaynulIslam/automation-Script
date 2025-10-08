@@ -861,6 +861,7 @@ def test_case_one():
     exception_count = 0
     start_time = time.time()
     last_refresh_time = start_time
+    last_fail_description = None  # Track last failure to avoid duplicate logging
 
     # Initialize Excel report
     print('\n[WORKFLOW] Initializing Excel report...')
@@ -913,17 +914,38 @@ def test_case_one():
                 # Build fail description and capture screenshot if failed
                 fail_description = ''
                 screenshot_path = ''
+                is_duplicate_failure = False
+
                 if not overall_pass:
                     fail_description = build_fail_description(device_count_result, sensor_sequence_result)
-                    screenshot_path = capture_failure_screenshot(page, iteration)
 
-                # Write to Excel report
-                write_test_result_to_excel(
-                    test_run=iteration,
-                    pass_fail='PASS' if overall_pass else 'FAIL',
-                    fail_description=fail_description,
-                    screenshot_path=screenshot_path
-                )
+                    # Check if this is a duplicate failure
+                    if last_fail_description and fail_description == last_fail_description:
+                        is_duplicate_failure = True
+                        print(f'[INFO] Duplicate failure detected - suppressing in Excel report')
+                    else:
+                        # New or different failure - capture screenshot and update tracking
+                        screenshot_path = capture_failure_screenshot(page, iteration)
+                        last_fail_description = fail_description
+                else:
+                    # Test passed - reset failure tracking
+                    last_fail_description = None
+
+                # Write to Excel report (write PASS if duplicate failure to avoid clutter)
+                if is_duplicate_failure:
+                    write_test_result_to_excel(
+                        test_run=iteration,
+                        pass_fail='PASS',
+                        fail_description='',
+                        screenshot_path=''
+                    )
+                else:
+                    write_test_result_to_excel(
+                        test_run=iteration,
+                        pass_fail='PASS' if overall_pass else 'FAIL',
+                        fail_description=fail_description,
+                        screenshot_path=screenshot_path
+                    )
 
                 # Record results for final summary
                 results.append({
@@ -990,17 +1012,38 @@ def test_case_one():
                     # Build fail description and capture screenshot if failed
                     fail_description = ''
                     screenshot_path = ''
+                    is_duplicate_failure = False
+
                     if not overall_pass:
                         fail_description = build_fail_description(device_count_result, sensor_sequence_result)
-                        screenshot_path = capture_failure_screenshot(page, iteration)
 
-                    # Write to Excel report
-                    write_test_result_to_excel(
-                        test_run=iteration,
-                        pass_fail='PASS (after retry)' if overall_pass else 'FAIL (after retry)',
-                        fail_description=fail_description,
-                        screenshot_path=screenshot_path
-                    )
+                        # Check if this is a duplicate failure
+                        if last_fail_description and fail_description == last_fail_description:
+                            is_duplicate_failure = True
+                            print(f'[INFO] Duplicate failure detected - suppressing in Excel report')
+                        else:
+                            # New or different failure - capture screenshot and update tracking
+                            screenshot_path = capture_failure_screenshot(page, iteration)
+                            last_fail_description = fail_description
+                    else:
+                        # Test passed - reset failure tracking
+                        last_fail_description = None
+
+                    # Write to Excel report (write PASS if duplicate failure to avoid clutter)
+                    if is_duplicate_failure:
+                        write_test_result_to_excel(
+                            test_run=iteration,
+                            pass_fail='PASS',
+                            fail_description='',
+                            screenshot_path=''
+                        )
+                    else:
+                        write_test_result_to_excel(
+                            test_run=iteration,
+                            pass_fail='PASS (after retry)' if overall_pass else 'FAIL (after retry)',
+                            fail_description=fail_description,
+                            screenshot_path=screenshot_path
+                        )
 
                     # Record results for final summary
                     results.append({
