@@ -305,7 +305,7 @@ def build_device_existence_failure_description(device_result, devices_df):
 
 
 def build_sensor_sequence_failure_description(sensor_result, devices_df, sensors_df, conn):
-    """Build detailed sensor sequence failure description with sensor names and ranges"""
+    """Build detailed sensor sequence failure description with Database and Frontend sensor priorities"""
     if sensor_result.get('pass', False):
         return ''
 
@@ -317,14 +317,14 @@ def build_sensor_sequence_failure_description(sensor_result, devices_df, sensors
 
     for idx, failure in enumerate(failure_details, 1):
         device_name = failure['device_name']
+        device_ip = failure.get('device_ip', 'N/A')  # Use stored IP directly
+        frontend_sensors = failure.get('frontend_sensors', [])
 
-        # Find device IP
-        device_row = devices_df[devices_df['device_name'] == device_name]
-        ip_address = device_row.iloc[0]['ip_address'] if not device_row.empty else 'N/A'
+        description_lines.append(f"{idx}. Device: {device_name} - {device_ip}")
 
-        description_lines.append(f"{idx}. Device: {device_name} - {ip_address}")
+        # Get database sensor sequence using the stored IP to find the correct device
+        device_row = devices_df[devices_df['ip_address'] == device_ip] if device_ip != 'N/A' else devices_df[devices_df['device_name'] == device_name].head(1)
 
-        # Get expected sensor sequence from DB
         if not device_row.empty:
             device_id = device_row.iloc[0]['id']
             device_sensors = sensors_df[sensors_df['device_id'] == device_id].copy()
@@ -342,7 +342,7 @@ def build_sensor_sequence_failure_description(sensor_result, devices_df, sensors
             ).head(10)
 
             # Join with sensor types to get sensor names and ranges
-            backend_sensors = []
+            database_sensors = []
             for _, sensor in device_sensors.iterrows():
                 if pd.notna(sensor.get('sensor_type')):
                     # Find sensor type
@@ -350,18 +350,23 @@ def build_sensor_sequence_failure_description(sensor_result, devices_df, sensors
                     if not sensor_type_row.empty:
                         screen_name = sensor_type_row.iloc[0]['screen_name']
                         range_val = sensor_type_row.iloc[0]['range']
-                        backend_sensors.append(f"{screen_name} {range_val}")
+                        database_sensors.append(f"{screen_name} {range_val}")
                     else:
                         # Fallback to location if sensor type not found
                         if pd.notna(sensor.get('location')):
-                            backend_sensors.append(sensor['location'])
+                            database_sensors.append(sensor['location'])
                 else:
                     # No sensor type, use location
                     if pd.notna(sensor.get('location')):
-                        backend_sensors.append(sensor['location'])
+                        database_sensors.append(sensor['location'])
 
-            if backend_sensors:
-                description_lines.append(f"   Backend sensor priority: {', '.join(backend_sensors)}")
+            # Show Database sensor priority
+            if database_sensors:
+                description_lines.append(f"   Database sensor priority: {', '.join(database_sensors)}")
+
+            # Show Frontend sensor priority
+            if frontend_sensors:
+                description_lines.append(f"   Frontend sensor priority: {', '.join(frontend_sensors)}")
 
         if idx < len(failure_details):
             description_lines.append("")
@@ -419,19 +424,83 @@ def capture_failure_screenshots_by_type(page, browser, conn, iteration, timestam
         evidence_files.append(frontend_filename)
         print(f'[SCREENSHOT] Sensor Sequence Frontend: {frontend_filename}')
 
-        # Database screenshot - show sensor priorities
+        # Database screenshot - show sensor priorities in table format
         db_filename = f'iteration_{iteration}_{timestamp}_sensor_sequence_database.png'
         db_path = os.path.join(os.path.dirname(__file__), 'evidence', db_filename)
 
         # Get failed devices and their sensors
         failure_details = sensor_result.get('failure_details', [])
+
+        # Fetch sensor types for readable names
+        sensor_types_df = fetch_sensor_types_from_db(conn)
+
+        # Build table data
+        table_data = []
+
         if failure_details:
-            failed_device_names = [f['device_name'] for f in failure_details]
-            failed_device_ids = devices_df[devices_df['device_name'].isin(failed_device_names)]['id'].tolist()
-            failed_sensors = sensors_df[sensors_df['device_id'].isin(failed_device_ids)]
-            failed_sensors = failed_sensors[['device_id', 'location', 'priority', 'is_configured']].sort_values(['device_id', 'priority'])
-            capture_db_screenshot(failed_sensors, f"Sensor Sequence - Database", db_path, browser)
+            # Get unique device IPs from failure details to avoid duplicates
+            failed_device_ips = [f.get('device_ip') for f in failure_details if f.get('device_ip') and f.get('device_ip') != 'N/A']
+
+            # Match devices by IP to ensure we get the exact failing devices
+            if failed_device_ips:
+                failed_devices = devices_df[devices_df['ip_address'].isin(failed_device_ips)]
+            else:
+                # Fallback to name-based matching if no IPs available
+                failed_device_names = [f['device_name'] for f in failure_details]
+                failed_devices = devices_df[devices_df['device_name'].isin(failed_device_names)]
+
+            for _, device in failed_devices.iterrows():
+                device_id = device['id']
+                device_name = device['device_name']
+                device_ip = device['ip_address']
+
+                # Get sensors for this device
+                device_sensors = sensors_df[sensors_df['device_id'] == device_id].copy()
+
+                # Filter configured sensors
+                if device_sensors['is_configured'].notna().any():
+                    configured = device_sensors[device_sensors['is_configured'] != 0]
+                    if len(configured) > 0:
+                        device_sensors = configured
+
+                # Sort by priority
+                device_sensors = device_sensors.sort_values(
+                    by='priority',
+                    key=lambda x: x.replace(0, 999)
+                ).head(10)
+
+                # Build row with device info and sensor names
+                row = {
+                    'Device Name': device_name,
+                    'IP Address': device_ip
+                }
+
+                # Add sensors 1-10
+                for i in range(1, 11):
+                    if i <= len(device_sensors):
+                        sensor = device_sensors.iloc[i-1]
+
+                        # Get sensor name with type
+                        sensor_name = sensor['location']  # fallback
+                        if pd.notna(sensor.get('sensor_type')):
+                            sensor_type_row = sensor_types_df[sensor_types_df['id'] == sensor['sensor_type']]
+                            if not sensor_type_row.empty:
+                                screen_name = sensor_type_row.iloc[0]['screen_name']
+                                range_val = sensor_type_row.iloc[0]['range']
+                                sensor_name = f"{screen_name} {range_val}"
+
+                        row[f'Sensor {i}'] = sensor_name
+                    else:
+                        row[f'Sensor {i}'] = '-'
+
+                table_data.append(row)
+
+        # Create DataFrame from table data
+        if table_data:
+            db_table_df = pd.DataFrame(table_data)
+            capture_db_screenshot(db_table_df, f"Sensor Sequence - Database", db_path, browser)
         else:
+            # Fallback if no failure details
             capture_db_screenshot(sensors_df.head(20), f"Sensor Sequence - Database", db_path, browser)
 
         evidence_files.append(db_filename)
@@ -634,16 +703,40 @@ def verify_aqs_tab(page, conn):
         for row_idx in range(frontend_device_count):
             row = table_rows.nth(row_idx)
             try:
-                # Extract device name (adjust selector as needed)
+                # Extract device name and IP address from frontend
                 device_name_cell = row.locator('td').nth(1)
                 device_name_text = device_name_cell.inner_text().split('\n')[0].strip()
                 found_device_names.add(device_name_text)
 
-                # Find device in database
+                # Extract IP address (typically in column 0 or within device name cell)
+                # Try to get IP from first column
+                try:
+                    ip_cell = row.locator('td').nth(0)
+                    device_ip_text = ip_cell.inner_text().strip()
+                except:
+                    device_ip_text = None
+
+                # If IP not in column 0, try extracting from device name cell (might contain IP on second line)
+                if not device_ip_text or not device_ip_text.replace('.', '').replace(':', '').isdigit():
+                    try:
+                        full_text = device_name_cell.inner_text().split('\n')
+                        if len(full_text) > 1:
+                            device_ip_text = full_text[1].strip()
+                    except:
+                        device_ip_text = None
+
+                # Find device in database by matching BOTH name AND IP
                 device_id = None
+                device_ip_from_db = None
                 for _, device in aqs_devices.iterrows():
-                    if device['device_name'] == device_name_text:
+                    # Match by IP if available, otherwise fall back to name-only matching
+                    if device_ip_text and device['ip_address'] == device_ip_text:
                         device_id = device['id']
+                        device_ip_from_db = device['ip_address']
+                        break
+                    elif not device_ip_text and device['device_name'] == device_name_text:
+                        device_id = device['id']
+                        device_ip_from_db = device['ip_address']
                         break
 
                 if device_id:
@@ -664,15 +757,20 @@ def verify_aqs_tab(page, conn):
                         key=lambda x: x.replace(0, 999)
                     ).head(10)
 
-                    # Verify sensor sequence (simplified - adjust based on frontend structure)
+                    # Verify sensor sequence and capture frontend sensors
                     sensor_match = True
                     sensor_mismatches = []
+                    frontend_sensors = []  # Capture actual frontend sensor sequence
 
                     for sensor_idx, (_, sensor) in enumerate(device_sensors.iterrows(), 1):
                         try:
                             sensor_column_idx = 1 + sensor_idx
                             sensor_cell = row.locator('td').nth(sensor_column_idx)
                             sensor_text = sensor_cell.inner_text().strip()
+
+                            # Store frontend sensor text
+                            if sensor_text:
+                                frontend_sensors.append(sensor_text[:50])  # Limit length
 
                             expected_location = sensor['location']
                             if expected_location and expected_location not in sensor_text:
@@ -688,7 +786,9 @@ def verify_aqs_tab(page, conn):
                         sensor_verification['pass'] = False
                         sensor_verification['failure_details'].append({
                             'device_name': device_name_text,
-                            'mismatches': sensor_mismatches
+                            'device_ip': device_ip_from_db,  # Store the actual IP from database
+                            'mismatches': sensor_mismatches,
+                            'frontend_sensors': frontend_sensors  # Include frontend sensor sequence
                         })
 
             except Exception as e:
