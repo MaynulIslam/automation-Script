@@ -1,0 +1,157 @@
+================================================================================
+        HOW SENSOR TABLES WORK - EXPLAINED SIMPLY
+================================================================================
+
+Think of it like a TOY STORE and YOUR TOY BOX at home!
+
+================================================================================
+1. SensorTypes Table = THE TOY CATALOG (Library of All Possible Toys)
+================================================================================
+
+This is like a big catalog that shows ALL the different types of toys that exist
+in the world. It tells you:
+  - What the toy is called
+  - What it looks like
+  - What it can do
+  - Its size and features
+
+EXAMPLE from SensorTypes:
+  ID: 1
+  Name: CO (Carbon Monoxide)
+  Range: 100 ppm
+  Unit: ppm
+  Max: 100
+
+This is saying: "We have a sensor type that can measure Carbon Monoxide gas
+up to 100 ppm. It's like having a toy car that can go up to 100 mph."
+
+
+================================================================================
+2. DeviceSensorMasters Table = YOUR TOY BOX (Actual Toys You Own)
+================================================================================
+
+This is YOUR personal toy box at home. It shows:
+  - Which toys YOU actually have
+  - Which room/device the toy is in
+  - What order you play with them (priority)
+  - Where in the room they are placed (location)
+
+EXAMPLE from DeviceSensorMasters:
+  Sensor ID: 24
+  Device ID: 13 (like Room #13 in your house)
+  Location: "Gas 1"
+  Priority: 1 (first sensor to check)
+  Sensor Type: 1 (this points to the catalog!)
+
+This is saying: "In room 13, at location 'Gas 1', I have the #1 priority
+sensor, and it's the TYPE of sensor from catalog ID 1 (the CO 100ppm sensor)."
+
+
+================================================================================
+3. HOW THEY CONNECT (The Link)
+================================================================================
+
+DeviceSensorMasters.sensor_type → SensorTypes.id
+
+Think: "My toy box has a TOY CAR, and sensor_type=5 tells me to look at
+       page 5 in the catalog to see what kind of car it is!"
+
+REAL EXAMPLE:
+
+  My Device (Room 90):
+  └─ Sensor at "Integral" location
+     └─ sensor_type = 7
+        └─ Go look at SensorTypes where id=7
+           └─ Found! It's "NO (Nitric Oxide) 1000 ppm"
+
+So now I know: "Room 90 has a Nitric Oxide sensor that can measure up to
+1000 ppm at the Integral location!"
+
+
+================================================================================
+4. WHY TWO TABLES? (Why not just one?)
+================================================================================
+
+Imagine if EVERY toy in your toy box came with its own instruction manual!
+That would be:
+  ✗ A LOT of repeated paper (waste of space!)
+  ✗ Hard to update (if you change the manual, you'd have to change it
+    everywhere!)
+
+INSTEAD:
+  ✓ Keep ONE master catalog (SensorTypes) with all the details
+  ✓ Your toy box (DeviceSensorMasters) just says "I have toy #7" and points
+    to the catalog
+  ✓ If the catalog updates, everyone automatically sees the new info!
+
+
+================================================================================
+5. REAL WORLD EXAMPLE
+================================================================================
+
+DEVICE #90 has these sensors:
+
+Sensor 1:
+  - Location: "Integral"
+  - Priority: 0 (checked first)
+  - sensor_type: 7
+  - Look up type 7 in catalog → NO (Nitric Oxide) 1000 ppm
+
+Sensor 2:
+  - Location: "Gas 1"
+  - Priority: 1 (checked second)
+  - sensor_type: 1
+  - Look up type 1 in catalog → CO (Carbon Monoxide) 100 ppm
+
+So Device #90 checks:
+  1st → Nitric Oxide sensor at "Integral"
+  2nd → Carbon Monoxide sensor at "Gas 1"
+
+
+================================================================================
+6. PRIORITY (The Order They're Checked)
+================================================================================
+
+Think of priority like a lunch line at school:
+  - Priority 0 = First in line (gets checked first)
+  - Priority 1 = Second in line
+  - Priority 2 = Third in line
+  And so on...
+
+Lower number = More important = Checked first!
+
+
+================================================================================
+7. LOCATION (Where the Sensor Is)
+================================================================================
+
+This is like saying where in your room the toy is:
+  - "Integral" = Built into the device (like a built-in speaker)
+  - "Gas 1" = External sensor port 1
+  - "Gas 2" = External sensor port 2
+  - "Remote" = Far away sensor connected by cable
+
+
+================================================================================
+SUMMARY (The Simple Version)
+================================================================================
+
+SensorTypes = Big catalog of all sensor types that exist
+              (What CAN exist)
+
+DeviceSensorMasters = Your actual sensors in your devices
+                      (What you ACTUALLY have)
+
+Connection = sensor_type number points to the catalog ID
+             (Like "I have toy #7, look it up in the catalog!")
+
+Priority = What order to check them
+           (0 is first, 1 is second, etc.)
+
+Location = Where the sensor is placed
+           (Integral, Gas 1, Remote, etc.)
+
+
+================================================================================
+END OF EXPLANATION
+================================================================================

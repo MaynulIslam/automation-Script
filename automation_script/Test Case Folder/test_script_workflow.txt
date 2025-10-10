@@ -1,0 +1,492 @@
+================================================================================
+        TEST AUTOMATION FLOW - COMPLETE EXPLANATION
+================================================================================
+
+OVERVIEW:
+The script tests the Duetto Analytics dashboard by verifying that frontend
+displays match database values for devices and sensors. It can randomly change
+sensor priorities and verify the changes are reflected correctly.
+
+================================================================================
+PHASE 1: CONFIGURATION (Start of Script)
+================================================================================
+
+When you run the script, it asks you:
+
+1. DA instance URL: http://192.168.10.232:3000/
+2. Sensor combinations to test: 3
+3. Checks per combination: 5
+4. Total iterations: 10
+5. Skip login after first? y/n
+
+WHAT THIS MEANS:
+- Sensor combinations: How many times to randomize sensor priorities
+                       (applies from iteration 2 onwards)
+- Checks per combination: For each sensor combination, how many times to verify it
+- Total iterations: Total number of test cycles to run
+- Skip login: After first login, stay logged in for remaining iterations
+
+================================================================================
+PHASE 2: INITIALIZATION
+================================================================================
+
+1. CREATE EXCEL REPORT - Test_Report.xlsx with columns:
+   - Iteration #
+   - Dashboard Matrix (Total/Active/Offline devices)
+   - Air Quality Station (Device Exists)
+   - Sensor Sequence
+   - Evidence (screenshot links)
+
+2. CONNECT TO DATABASE - PostgreSQL connection to query data
+   - Host: 192.168.10.232
+   - Database: duetto_analytics_db
+   - Queries: Devices, DeviceSensorMasters, SensorTypes
+
+3. LAUNCH BROWSER - Chromium browser opens (not headless, so you can see it)
+   - Viewport: 1920x1080
+   - Slow motion: 500ms (for visibility)
+
+================================================================================
+PHASE 3: TEST ITERATIONS LOOP
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ITERATION 1 - Check Existing Configuration (Baseline)                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+STEP 1: LOGIN
+--------------
+- Navigate to DA instance URL
+- Enter credentials (admin/admin)
+- Click login button
+- Verify login successful (check for Dashboard button)
+
+STEP 2: RUN MULTIPLE CHECKS (Checks 1.1, 1.2, 1.3, etc.)
+---------------------------------------------------------
+For each check, perform three verifications:
+
+CHECK 2.1: Dashboard Matrix Verification
+-----------------------------------------
+Frontend:                    Database:
+Total Devices: 90     VS     Total Devices: 90
+Active: 85                   Active: 85
+Offline: 5                   Offline: 5
+
+Result: PASS ✓ or FAIL ✗
+
+How it works:
+  1. Click Dashboard button
+  2. Extract metrics from frontend (using Playwright selectors)
+  3. Query database for device counts
+  4. Compare frontend vs database
+
+If FAIL, description shows:
+  Total Devices Mismatch:
+    Frontend: 90 devices
+    Database: 91 devices
+  Active Devices Mismatch:
+    Frontend: 85 devices
+    Database: 84 devices
+
+CHECK 2.2: Air Quality Station - Device Exists
+-----------------------------------------------
+Frontend Devices:            Database Devices (device_type_id = 3,4,5):
+- AQS-001                    - AQS-001
+- AQS-002                    - AQS-002
+- AQS-003                    - AQS-003
+
+Result: PASS ✓ or FAIL ✗
+
+How it works:
+  1. Stay on Dashboard page
+  2. Wait for device table to load
+  3. Count rows in frontend table
+  4. Query database for AQS devices (type 3, 4, 5)
+  5. Compare device names
+
+If FAIL, description shows:
+  Frontend doesn't have these devices:
+    - AQS-005 - 192.168.10.55
+    - AQS-007 - 192.168.10.57
+
+  Database doesn't have these devices:
+    - AQS-999
+
+CHECK 2.3: Sensor Sequence Verification
+----------------------------------------
+For each Air Quality Station device:
+
+Frontend sensor order:     Backend sensor priority:
+1. CO 100 ppm       VS     1. CO 100 ppm
+2. NO2 10 ppm              2. NO2 10 ppm
+3. H2S 50 ppm              3. H2S 50 ppm
+4. NO 1000 ppm             4. NO 1000 ppm
+
+Result: PASS ✓ or FAIL ✗
+
+How it works:
+  1. For each device in frontend table
+  2. Extract sensor columns (columns 2-11)
+  3. Query DeviceSensorMasters for device_id
+  4. Filter configured sensors (is_configured != 0)
+  5. Sort by priority (lower = higher priority)
+  6. Join with SensorTypes to get sensor names and ranges
+  7. Compare frontend sequence vs database sequence
+
+If FAIL, description shows:
+  1. Device: AQS-001 - 192.168.10.50
+     Backend sensor priority: CO 100 ppm, NO2 10 ppm, H2S 50 ppm, NO 1000 ppm
+
+  2. Device: AQS-003 - 192.168.10.52
+     Backend sensor priority: H2S 100 ppm, CO 500 ppm, O2 25.0 %
+
+STEP 3: SCREENSHOT ON FAILURE
+------------------------------
+If any check fails, take type-specific screenshots:
+
+Dashboard Matrix fail:
+  - iteration_1.1_20251010_144406_dashboard_matrix_frontend.png
+  - iteration_1.1_20251010_144406_dashboard_matrix_database.png
+
+Device Exists fail:
+  - iteration_1.1_20251010_144406_aqs_devices_frontend.png
+  - iteration_1.1_20251010_144406_aqs_devices_database.png
+
+Sensor Sequence fail:
+  - iteration_1.1_20251010_144406_sensor_sequence_frontend.png
+  - iteration_1.1_20251010_144406_sensor_sequence_database.png
+
+All screenshots saved to: Test Case Folder/evidence/
+
+Database screenshots are HTML tables rendered as images showing:
+  - Dashboard Matrix DB: Top 20 devices with all fields
+  - AQS Devices DB: Filtered AQS devices (device_name, ip_address, device_type_id)
+  - Sensor Sequence DB: Failed device sensors (device_id, location, priority, is_configured)
+
+STEP 4: WRITE TO EXCEL
+-----------------------
+Write result for this check (e.g., 1.1) to Excel with:
+- PASS/FAIL status
+- Detailed description (with sensor names like "CO 100 ppm" instead of "Integral")
+- Screenshot file names in Evidence column
+
+REPEAT for all checks (1.1, 1.2, 1.3, 1.4, 1.5, etc.)
+
+--------------------------------------------------------------------------------
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ITERATION 2+ - Apply New Sensor Combination and Verify                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+STEP 1: LOGIN (if skip_login = No)
+-----------------------------------
+- Re-login to dashboard if user chose not to skip login
+
+STEP 2: APPLY RANDOM SENSOR COMBINATION VIA MQTT
+-------------------------------------------------
+1. Pick first AQS device from database (e.g., device_id = 13)
+
+2. Generate random sensor priority:
+   - Get all sensors for device_id = 13
+   - Filter configured sensors (is_configured != 0)
+   - Randomly shuffle the sensors
+   - Take up to 10 sensors
+   - Create priority order (position in list = priority)
+
+3. Build MQTT payload:
+   {
+     "device_id": 13,
+     "sensor_priority": [
+       {
+         "id": 24,
+         "config_type": "Gas 1",
+         "name": "",
+         "location": "Gas 1",
+         "selectedItems": []
+       },
+       {
+         "id": 30,
+         "config_type": "Integral",
+         "name": "",
+         "location": "Integral",
+         "selectedItems": []
+       },
+       ...
+     ],
+     "device_type": 3
+   }
+
+4. Publish via MQTT:
+   Broker: 192.168.10.232:1883
+   Topic: duetto_analytics/aqs/sensor_priority/13
+   Payload: (JSON from step 3)
+
+5. Wait 5 seconds for MQTT broker to process
+
+6. Verify change applied in database:
+   - Reconnect to database
+   - Fetch updated DeviceSensorMasters table
+   - Confirm priority values changed
+
+STEP 3-6: SAME AS ITERATION 1
+------------------------------
+- Run multiple checks (2.1, 2.2, 2.3, etc.)
+- Verify Dashboard Matrix
+- Verify Device Exists
+- Verify Sensor Sequence (with NEW random order)
+- Take screenshots if fail
+- Write to Excel
+
+REPEAT for all remaining iterations (3, 4, 5, etc.)
+
+================================================================================
+PHASE 4: RESULTS & CLEANUP
+================================================================================
+
+After all iterations complete:
+
+1. Close database connection
+   - conn.close()
+
+2. Wait 5 seconds
+   - Give user time to see completion message
+
+3. Close browser
+   - browser.close()
+
+4. Excel report is complete with all results
+   - Located at: Test Case Folder/Test_Report.xlsx
+
+================================================================================
+EXCEL REPORT STRUCTURE
+================================================================================
+
+Column Headers:
+  A: Iteration #
+  B: Dashboard Matrix
+  C: Air Quality Station (Device Exists)
+  D: Sensor Sequence
+  E: Evidence
+
+Example Rows:
+
+┌─────────┬──────────────────┬──────────────────┬──────────────────┬──────────┐
+│Iteration│Dashboard Matrix  │Air Quality       │Sensor Sequence   │Evidence  │
+│    #    │                  │Station           │                  │          │
+├─────────┼──────────────────┼──────────────────┼──────────────────┼──────────┤
+│  1.1    │ PASS             │ PASS             │ FAIL             │ iteration│
+│         │                  │                  │                  │ _1.1_... │
+│         │                  │                  │ 1. Device: AQS-  │ _sensor_ │
+│         │                  │                  │ 001 - 192.168.   │ sequence │
+│         │                  │                  │ 10.50            │ _frontend│
+│         │                  │                  │    Backend sensor│ .png,    │
+│         │                  │                  │    priority: CO  │ ...      │
+│         │                  │                  │    100 ppm, NO2  │          │
+│         │                  │                  │    10 ppm        │          │
+├─────────┼──────────────────┼──────────────────┼──────────────────┼──────────┤
+│  1.2    │ PASS             │ PASS             │ PASS             │          │
+├─────────┼──────────────────┼──────────────────┼──────────────────┼──────────┤
+│  2.1    │ FAIL             │ PASS             │ PASS             │ iteration│
+│         │                  │                  │                  │ _2.1_... │
+│         │ Total Devices    │                  │                  │ _dashbrd │
+│         │ Mismatch:        │                  │                  │ _matrix_ │
+│         │   Frontend: 90   │                  │                  │ frontend │
+│         │   Database: 91   │                  │                  │ .png,... │
+└─────────┴──────────────────┴──────────────────┴──────────────────┴──────────┘
+
+================================================================================
+KEY FEATURES
+================================================================================
+
+✅ Shows actual sensor names
+   - "CO 100 ppm, NO2 10 ppm, H2S 50 ppm"
+   - Instead of "Integral, Remote, Gas 1"
+
+✅ Type-specific screenshots
+   - Separate screenshots for Dashboard Matrix, Device Exists, Sensor Sequence
+   - Each with frontend + database evidence
+
+✅ Detailed descriptions
+   - Device names with IP addresses
+   - Exact mismatches between frontend and database
+   - Sensor sequences with readable names and ranges
+
+✅ Random testing
+   - Changes sensor priorities randomly via MQTT
+   - Tests different combinations automatically
+   - Verifies MQTT changes are reflected in frontend
+
+✅ Evidence tracking
+   - All screenshots saved to evidence/ folder
+   - Linked in Excel Evidence column
+   - Timestamped for traceability
+
+================================================================================
+FLOW DIAGRAM
+================================================================================
+
+START
+  |
+  v
+Get Configuration (URL, iterations, checks, etc.)
+  |
+  v
+Initialize Excel Report (Test_Report.xlsx)
+  |
+  v
+Connect to Database (PostgreSQL)
+  |
+  v
+Launch Browser (Chromium)
+  |
+  v
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ FOR each iteration (1 to total):                                           │
+│   |                                                                         │
+│   v                                                                         │
+│ Login (if needed)                                                           │
+│   |                                                                         │
+│   v                                                                         │
+│ If iteration > 1:                                                           │
+│   Apply Random Sensor Combination via MQTT                                  │
+│   Wait 5 seconds                                                            │
+│   Verify in Database                                                        │
+│   |                                                                         │
+│   v                                                                         │
+│ ┌─────────────────────────────────────────────────────────────────────────┐ │
+│ │ FOR each check (1 to checks_per_combination):                          │ │
+│ │   |                                                                     │ │
+│ │   v                                                                     │ │
+│ │ Verify Dashboard Matrix (Total/Active/Offline)                         │ │
+│ │   |                                                                     │ │
+│ │   v                                                                     │ │
+│ │ Verify Device Exists (AQS device list)                                 │ │
+│ │   |                                                                     │ │
+│ │   v                                                                     │ │
+│ │ Verify Sensor Sequence (sensor priority order)                         │ │
+│ │   |                                                                     │ │
+│ │   v                                                                     │ │
+│ │ Determine Pass/Fail                                                    │ │
+│ │   |                                                                     │ │
+│ │   v                                                                     │ │
+│ │ If FAIL:                                                               │ │
+│ │   Identify failure type (Dashboard/Device/Sensor)                      │ │
+│ │   Take type-specific screenshots (frontend + database)                 │ │
+│ │   Build detailed descriptions with device names & sensor info          │ │
+│ │   |                                                                     │ │
+│ │   v                                                                     │ │
+│ │ Write to Excel:                                                        │ │
+│ │   - Iteration.Check number (e.g., 2.3)                                 │ │
+│ │   - PASS/FAIL for each column                                          │ │
+│ │   - Detailed descriptions                                              │ │
+│ │   - Evidence screenshot filenames                                      │ │
+│ │   |                                                                     │ │
+│ │   v                                                                     │ │
+│ │ Wait 2 seconds before next check                                       │ │
+│ └─────────────────────────────────────────────────────────────────────────┘ │
+│   |                                                                         │
+│   v                                                                         │
+│ Wait 5 seconds before next iteration                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+  |
+  v
+Close Database Connection
+  |
+  v
+Wait 5 seconds
+  |
+  v
+Close Browser
+  |
+  v
+END (Excel report complete in Test Case Folder/)
+
+================================================================================
+DATABASE TABLES USED
+================================================================================
+
+1. Devices
+   - Used for: Dashboard Matrix, Device Exists verification
+   - Key fields: id, device_name, ip_address, device_type_id, status
+
+2. DeviceSensorMasters
+   - Used for: Sensor Sequence verification
+   - Key fields: device_id, sensor_type, location, priority, is_configured
+   - Links to: Devices (via device_id), SensorTypes (via sensor_type)
+
+3. SensorTypes
+   - Used for: Getting readable sensor names and ranges
+   - Key fields: id, screen_name, range, abbreviation, unit
+   - Example: id=1 → "CO" "100 ppm"
+
+Relationship:
+  Devices (id) ← DeviceSensorMasters (device_id)
+  SensorTypes (id) ← DeviceSensorMasters (sensor_type)
+
+================================================================================
+MQTT TOPIC STRUCTURE
+================================================================================
+
+Topic Pattern:
+  duetto_analytics/aqs/sensor_priority/{device_id}
+
+Example:
+  duetto_analytics/aqs/sensor_priority/13
+
+Payload Structure:
+  {
+    "device_id": <integer>,
+    "sensor_priority": [
+      {
+        "id": <sensor_id>,
+        "config_type": <string>,
+        "name": <string>,
+        "location": <string>,
+        "selectedItems": <array>
+      },
+      ...
+    ],
+    "device_type": <integer>
+  }
+
+Purpose:
+  - Remotely update sensor priority order for an AQS device
+  - Device receives MQTT message and reorders sensor display
+  - Database is updated with new priority values
+  - Frontend should reflect the new sensor order
+
+================================================================================
+FILE STRUCTURE
+================================================================================
+
+Test Case Folder/
+├── automation_test.py          # Main test script (933 lines)
+├── Test_Report.xlsx            # Excel report (created by script)
+├── evidence/                   # Screenshot folder (created by script)
+│   ├── iteration_1.1_20251010_144406_dashboard_matrix_frontend.png
+│   ├── iteration_1.1_20251010_144406_dashboard_matrix_database.png
+│   ├── iteration_1.1_20251010_144406_sensor_sequence_frontend.png
+│   ├── iteration_1.1_20251010_144406_sensor_sequence_database.png
+│   └── ...
+├── sensor_workflow.txt         # Sensor tables explanation
+└── test_script_workflow.txt    # This file
+
+================================================================================
+HOW TO RUN
+================================================================================
+
+1. Navigate to Test Case Folder:
+   cd "C:\DA Test Automation\automation_script\Test Case Folder"
+
+2. Run the script:
+   python automation_test.py
+
+3. Answer configuration prompts
+
+4. Watch browser automation (it will open visibly)
+
+5. Check results in Test_Report.xlsx after completion
+
+================================================================================
+END OF DOCUMENTATION
+================================================================================

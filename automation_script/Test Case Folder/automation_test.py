@@ -103,6 +103,18 @@ def fetch_sensors_from_db(conn):
     return df
 
 
+def fetch_sensor_types_from_db(conn):
+    """Fetch sensor types from database"""
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM public."SensorTypes"')
+    columns = [desc[0] for desc in cursor.description]
+    data = cursor.fetchall()
+    cursor.close()
+
+    df = pd.DataFrame(data, columns=columns)
+    return df
+
+
 def verify_sensor_priority_in_db(conn, device_id, expected_priorities):
     """Verify if sensor priorities are applied in database"""
     sensors_df = fetch_sensors_from_db(conn)
@@ -186,7 +198,7 @@ def generate_random_sensor_combination(device_id, sensors_df):
     sensor_priority = []
     for idx, (_, sensor) in enumerate(device_sensors.iterrows(), 1):
         sensor_info = {
-            'id': int(sensor['id']),
+            'id': int(sensor['sensor_id']),  # Fixed: use 'sensor_id' column name
             'config_type': sensor['location'] if pd.notna(sensor['location']) else '',
             'name': sensor.get('name', ''),
             'location': sensor['location'] if pd.notna(sensor['location']) else '',
@@ -292,13 +304,16 @@ def build_device_existence_failure_description(device_result, devices_df):
     return '\n'.join(description_lines)
 
 
-def build_sensor_sequence_failure_description(sensor_result, devices_df, sensors_df):
-    """Build detailed sensor sequence failure description"""
+def build_sensor_sequence_failure_description(sensor_result, devices_df, sensors_df, conn):
+    """Build detailed sensor sequence failure description with sensor names and ranges"""
     if sensor_result.get('pass', False):
         return ''
 
     description_lines = []
     failure_details = sensor_result.get('failure_details', [])
+
+    # Fetch sensor types
+    sensor_types_df = fetch_sensor_types_from_db(conn)
 
     for idx, failure in enumerate(failure_details, 1):
         device_name = failure['device_name']
@@ -326,7 +341,25 @@ def build_sensor_sequence_failure_description(sensor_result, devices_df, sensors
                 key=lambda x: x.replace(0, 999)
             ).head(10)
 
-            backend_sensors = [sensor['location'] for _, sensor in device_sensors.iterrows() if pd.notna(sensor['location'])]
+            # Join with sensor types to get sensor names and ranges
+            backend_sensors = []
+            for _, sensor in device_sensors.iterrows():
+                if pd.notna(sensor.get('sensor_type')):
+                    # Find sensor type
+                    sensor_type_row = sensor_types_df[sensor_types_df['id'] == sensor['sensor_type']]
+                    if not sensor_type_row.empty:
+                        screen_name = sensor_type_row.iloc[0]['screen_name']
+                        range_val = sensor_type_row.iloc[0]['range']
+                        backend_sensors.append(f"{screen_name} {range_val}")
+                    else:
+                        # Fallback to location if sensor type not found
+                        if pd.notna(sensor.get('location')):
+                            backend_sensors.append(sensor['location'])
+                else:
+                    # No sensor type, use location
+                    if pd.notna(sensor.get('location')):
+                        backend_sensors.append(sensor['location'])
+
             if backend_sensors:
                 description_lines.append(f"   Backend sensor priority: {', '.join(backend_sensors)}")
 
@@ -792,34 +825,228 @@ def run_test_iteration(iteration, config, page, conn, browser, p, is_first_itera
 
     # If not first iteration, apply new sensor combination
     if not is_first_iteration:
-        print('\n[STEP] Generating and applying new sensor combination...')
+        print('\n' + '='*70)
+        print('APPLYING NEW SENSOR COMBINATIONS VIA MQTT - ALL AQS DEVICES')
+        print('='*70)
 
         # Get devices
         devices_df = fetch_devices_from_db(conn)
         sensors_df = fetch_sensors_from_db(conn)
-        aqs_devices = devices_df[devices_df['device_type_id'].isin([3, 4, 5])]
+        sensor_types_df = fetch_sensor_types_from_db(conn)
+        aqs_devices = devices_df[devices_df['device_type_id'].isin([3, 4, 5])].copy()
 
         if len(aqs_devices) > 0:
-            # Pick first AQS device for combination change
-            device = aqs_devices.iloc[0]
-            device_id = device['id']
-            device_type = device['device_type_id']
+            print(f'\n[INFO] Found {len(aqs_devices)} AQS devices')
 
-            # Generate random combination
-            new_combination = generate_random_sensor_combination(device_id, sensors_df)
+            # Helper function to get sensor name with type
+            def get_sensor_display_name(sensor_id, sensors_df, sensor_types_df):
+                sensor_row = sensors_df[sensors_df['sensor_id'] == sensor_id]
+                if sensor_row.empty:
+                    return f"Unknown (ID: {sensor_id})"
 
-            # Apply via MQTT
-            if apply_sensor_combination_via_mqtt(device_id, device_type, new_combination):
-                print('[SUCCESS] Sensor combination applied')
-                time.sleep(5)  # Wait for MQTT to process
+                location = sensor_row.iloc[0]['location']
+                sensor_name = location  # fallback
 
-                # Verify in database
-                conn_refresh = connect_to_database()
-                sensors_df_new = fetch_sensors_from_db(conn_refresh)
-                print('[INFO] Verified sensor combination in database')
-                conn_refresh.close()
-            else:
-                print('[ERROR] Failed to apply sensor combination')
+                if pd.notna(sensor_row.iloc[0].get('sensor_type')):
+                    sensor_type_id = sensor_row.iloc[0]['sensor_type']
+                    sensor_type_row = sensor_types_df[sensor_types_df['id'] == sensor_type_id]
+                    if not sensor_type_row.empty:
+                        screen_name = sensor_type_row.iloc[0]['screen_name']
+                        range_val = sensor_type_row.iloc[0]['range']
+                        sensor_name = f"{screen_name} {range_val}"
+
+                return sensor_name
+
+            # STEP 1: Show existing sensor combinations for ALL devices in TABLE format
+            print('\n' + '='*150)
+            print('EXISTING SENSOR COMBINATIONS FOR ALL AQS DEVICES:')
+            print('='*150)
+
+            # Collect data for table
+            existing_data = {}
+            max_sensors = 10  # Fixed to 10 columns
+
+            for idx, (_, device) in enumerate(aqs_devices.iterrows(), 1):
+                device_id = device['id']
+                device_name = device['device_name']
+
+                # Get existing sensors
+                existing_sensors = sensors_df[sensors_df['device_id'] == device_id].copy()
+
+                # Filter configured sensors
+                if existing_sensors['is_configured'].notna().any():
+                    configured = existing_sensors[existing_sensors['is_configured'] != 0]
+                    if len(configured) > 0:
+                        existing_sensors = configured
+
+                # Sort by current priority
+                existing_sensors = existing_sensors.sort_values(
+                    by='priority',
+                    key=lambda x: x.replace(0, 999)
+                ).head(10)
+
+                # Get sensor names
+                sensor_names = []
+                for _, sensor in existing_sensors.iterrows():
+                    sensor_id = sensor['sensor_id']
+                    sensor_name = get_sensor_display_name(sensor_id, sensors_df, sensor_types_df)
+                    sensor_names.append(sensor_name)
+
+                existing_data[device_name] = sensor_names
+
+            # Print table header
+            device_col_width = 20
+            sensor_col_width = 12
+
+            header = f"{'Device Name':<{device_col_width}}"
+            for i in range(1, 11):
+                header += f" | {'Sensor ' + str(i):<{sensor_col_width}}"
+
+            print('\n' + header)
+            print('-' * len(header))
+
+            # Print each device as a row
+            for device_name, sensors in existing_data.items():
+                # Truncate long device names
+                display_name = device_name[:device_col_width-1] if len(device_name) > device_col_width-1 else device_name
+                row = f"{display_name:<{device_col_width}}"
+
+                for i in range(10):
+                    sensor = sensors[i] if i < len(sensors) else '-'
+                    # Truncate long sensor names
+                    display_sensor = sensor[:sensor_col_width-1] if len(sensor) > sensor_col_width-1 else sensor
+                    row += f" | {display_sensor:<{sensor_col_width}}"
+
+                print(row)
+
+            print('-' * len(header))
+
+            # STEP 2: Generate and show NEW random combinations for ALL devices in TABLE format
+            print('\n' + '='*150)
+            print('NEW RANDOM COMBINATIONS TO BE APPLIED (SHUFFLED):')
+            print('='*150)
+
+            # Store new combinations for each device
+            device_combinations = {}
+            new_data = {}
+
+            for idx, (_, device) in enumerate(aqs_devices.iterrows(), 1):
+                device_id = device['id']
+                device_name = device['device_name']
+
+                # Generate random combination
+                new_combination = generate_random_sensor_combination(device_id, sensors_df)
+                device_combinations[device_id] = new_combination
+
+                # Get sensor names for new combination
+                new_sensor_names = []
+                for sensor_info in new_combination:
+                    sensor_id = sensor_info['id']
+                    sensor_name = get_sensor_display_name(sensor_id, sensors_df, sensor_types_df)
+                    new_sensor_names.append(sensor_name)
+
+                new_data[device_name] = new_sensor_names
+
+            # Print table header
+            device_col_width = 20
+            sensor_col_width = 12
+
+            header = f"{'Device Name':<{device_col_width}}"
+            for i in range(1, 11):
+                header += f" | {'Sensor ' + str(i):<{sensor_col_width}}"
+
+            print('\n' + header)
+            print('-' * len(header))
+
+            # Print each device as a row
+            for device_name, sensors in new_data.items():
+                # Truncate long device names
+                display_name = device_name[:device_col_width-1] if len(device_name) > device_col_width-1 else device_name
+                row = f"{display_name:<{device_col_width}}"
+
+                for i in range(10):
+                    sensor = sensors[i] if i < len(sensors) else '-'
+                    # Truncate long sensor names
+                    display_sensor = sensor[:sensor_col_width-1] if len(sensor) > sensor_col_width-1 else sensor
+                    row += f" | {display_sensor:<{sensor_col_width}}"
+
+                print(row)
+
+            print('-' * len(header))
+
+            # STEP 3: Apply via MQTT to each device
+            print('\n' + '='*70)
+            print('APPLYING VIA MQTT:')
+            print('='*70)
+
+            successful_devices = 0
+            failed_devices = 0
+
+            for idx, (_, device) in enumerate(aqs_devices.iterrows(), 1):
+                device_id = device['id']
+                device_name = device['device_name']
+                device_type = device['device_type_id']
+                new_combination = device_combinations[device_id]
+
+                print(f'\n[{idx}/{len(aqs_devices)}] Device: {device_name} (ID: {device_id})')
+
+                if len(new_combination) == 0:
+                    print('      ⊘ Skipped (no sensors to apply)')
+                    continue
+
+                # Publish via MQTT
+                mqtt_success = apply_sensor_combination_via_mqtt(device_id, device_type, new_combination)
+
+                if mqtt_success:
+                    print('      ✓ MQTT published')
+                    print('      ⏳ Waiting 5 seconds for MQTT processing...')
+                    time.sleep(5)
+
+                    # Verify in database
+                    conn_refresh = connect_to_database()
+                    sensors_df_new = fetch_sensors_from_db(conn_refresh)
+
+                    # Get updated sensors for this device
+                    updated_sensors = sensors_df_new[sensors_df_new['device_id'] == device_id].copy()
+
+                    # Filter configured sensors
+                    if updated_sensors['is_configured'].notna().any():
+                        configured = updated_sensors[updated_sensors['is_configured'] != 0]
+                        if len(configured) > 0:
+                            updated_sensors = configured
+
+                    # Sort by new priority
+                    updated_sensors = updated_sensors.sort_values(
+                        by='priority',
+                        key=lambda x: x.replace(0, 999)
+                    ).head(10)
+
+                    # Verify the order matches what we sent
+                    expected_ids = [s['id'] for s in new_combination]
+                    actual_ids = updated_sensors['sensor_id'].tolist()
+
+                    if expected_ids == actual_ids:
+                        print('      ✓ Verified in database - Match!')
+                        successful_devices += 1
+                    else:
+                        print('      ✗ Database verification FAILED - Mismatch!')
+                        print(f'        Expected: {expected_ids}')
+                        print(f'        Actual: {actual_ids}')
+                        failed_devices += 1
+
+                    conn_refresh.close()
+                else:
+                    print('      ✗ MQTT publish FAILED')
+                    failed_devices += 1
+
+            # Summary
+            print('\n' + '='*70)
+            print('MQTT APPLICATION SUMMARY:')
+            print('='*70)
+            print(f'Total devices: {len(aqs_devices)}')
+            print(f'Successful: {successful_devices} ✓')
+            print(f'Failed: {failed_devices} ✗')
+            print('='*70)
 
     # Run checks multiple times
     for check in range(1, config['checks_per_combination'] + 1):
@@ -857,7 +1084,7 @@ def run_test_iteration(iteration, config, page, conn, browser, p, is_first_itera
                 # Build detailed descriptions
                 dashboard_desc = build_dashboard_failure_description(dashboard_result, devices_df) if dashboard_failed else ''
                 device_desc = build_device_existence_failure_description(device_result, devices_df) if device_failed else ''
-                sensor_desc = build_sensor_sequence_failure_description(sensor_result, devices_df, sensors_df) if sensor_failed else ''
+                sensor_desc = build_sensor_sequence_failure_description(sensor_result, devices_df, sensors_df, conn) if sensor_failed else ''
 
             except Exception as e:
                 print(f'[ERROR] Screenshot capture failed: {e}')
